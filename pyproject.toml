@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "multiple-objects-dkluter"
+version = "0.1.0"
+description = ""
+authors = ["nishi-v <nishitav@futuresoftindia.com>"]
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.10"
+pillow = "^12.1.1"
+google-genai = "^1.68.0"
+python-dotenv = "^1.2.2"
+streamlit = "^1.55.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
