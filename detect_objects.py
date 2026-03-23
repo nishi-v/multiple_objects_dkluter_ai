@@ -1,16 +1,17 @@
 import os
 import re
 import json
-from typing import List, Dict
+from typing import List, Dict, Union
 from PIL import Image
 from dotenv import load_dotenv
+from pathlib import Path
 from google import genai
 from google.genai import types
 from google.genai.client import Client
 from google.genai.types import Tool, GoogleSearch
 
-def init_client() -> Client:
-    # load_dotenv()
+def init_client(env_path: Union[Path, str]) -> Client:
+    load_dotenv(env_path)
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise ValueError("GEMINI_API_KEY not found in environment or .env")

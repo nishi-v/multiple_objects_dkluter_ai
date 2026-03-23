@@ -1,16 +1,22 @@
 import os
 import re
 import json
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Union
 from PIL import Image
 from dotenv import load_dotenv
+from pathlib import Path
 from google import genai
 from google.genai import types
 from google.genai.types import Tool, GoogleSearch
 from google.genai.client import Client
 
-def init_client() -> Client:
-    # load_dotenv()
+dir = Path(os.getcwd())
+
+# Load environment variables from .env file
+ENV_PATH :Path= dir / '.env'
+
+def init_client(env_path:Union[Path, str]) -> Client:
+    load_dotenv(env_path)
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise ValueError("GEMINI_API_KEY not found in environment or .env")
@@ -64,7 +70,7 @@ def generate_metadata(
     obj: Optional[Dict[str, str]] = None,
     search_tool: bool = False
 ) -> Dict[str, Any]:
-    client = init_client()
+    client = init_client(ENV_PATH)
     data_list = build_auto_data_list(obj)
 
     prompt = f"""

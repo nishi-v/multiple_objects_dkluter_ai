@@ -6,10 +6,16 @@ import zipfile
 from io import BytesIO
 import streamlit as st
 from PIL import Image
+from pathlib import Path
 
 from detect_objects import init_client as init_detect_client, detect_objects
 from generate_object import init_client as init_generate_client, generate_object_image, safe_name
 from generate_metadata import generate_metadata
+
+dir = Path(os.getcwd())
+
+# Load environment variables from .env file
+ENV_PATH :Path= dir / '.env'
 
 st.set_page_config(page_title="Multiple Object Detection - D'kluter", layout="wide")
 
@@ -197,7 +203,7 @@ if uploaded_file is not None:
     if st.session_state.detected_objects is None:
         if st.button("Detect Objects", type="primary"):
             with st.spinner("Detecting objects..."):
-                client = init_detect_client()
+                client = init_detect_client(ENV_PATH)
                 st.session_state.detected_objects = detect_objects(
                     client,
                     st.session_state.uploaded_image_pil
@@ -229,7 +235,7 @@ if st.session_state.detected_objects is not None:
                 st.warning("Select at least one object.")
             else:
                 with st.spinner("Generating selected object images..."):
-                    gen_client = init_generate_client()
+                    gen_client = init_generate_client(ENV_PATH)
                     generated_results = []
 
                     for obj in selected_for_generation:
