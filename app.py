@@ -219,7 +219,7 @@ if st.session_state.detected_objects is not None:
     if not detected_objects:
         st.warning("No objects detected.")
     else:
-        st.subheader("1. Select Objects to Add")
+        st.subheader("1. Generate images for selected objects")
 
         selected_for_generation = []
         for obj in detected_objects:
@@ -230,7 +230,7 @@ if st.session_state.detected_objects is not None:
             if checked:
                 selected_for_generation.append(obj)
 
-        if st.button("Add Selected Objects", type="primary"):
+        if st.button("Generate images for selected objects", type="primary"):
             if not selected_for_generation:
                 st.warning("Select at least one object.")
             else:
@@ -270,7 +270,7 @@ if st.session_state.generation_done and st.session_state.generated_results:
     st.subheader("2. Selected Objects")
     render_generated_grid(st.session_state.generated_results)
 
-    st.subheader("3. Select Objects to add details")
+    st.subheader("3. Select Objects to Add Details")
 
     selected_for_metadata_ids = []
     for result in st.session_state.generated_results:
