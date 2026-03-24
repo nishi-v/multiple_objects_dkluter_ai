@@ -168,12 +168,12 @@ def create_download_zip(results, original_image_path):
     zip_buffer.seek(0)
     return zip_buffer
 
-st.title("Object Selection, Generation, and Metadata")
+st.title("D’kluter Multi-Object AI Studio")
 ensure_session_state()
 
 with st.sidebar:
     st.header("Settings")
-    enable_search_tool = st.checkbox("Enable Google Search Tool", value=False)
+    enable_search_tool = st.checkbox("Enable Google Search Tool", value=True)
 
     if st.button("Reset"):
         reset_state()
@@ -201,7 +201,7 @@ if uploaded_file is not None:
     st.image(st.session_state.uploaded_image_pil, caption="Input Image", width=320)
 
     if st.session_state.detected_objects is None:
-        if st.button("Detect Objects", type="primary"):
+        if st.button("Identify Objects", type="primary"):
             with st.spinner("Detecting objects..."):
                 client = init_detect_client(ENV_PATH)
                 st.session_state.detected_objects = detect_objects(
@@ -219,7 +219,7 @@ if st.session_state.detected_objects is not None:
     if not detected_objects:
         st.warning("No objects detected.")
     else:
-        st.subheader("1. Select Objects to Generate")
+        st.subheader("1. Select Objects to Add")
 
         selected_for_generation = []
         for obj in detected_objects:
@@ -230,11 +230,11 @@ if st.session_state.detected_objects is not None:
             if checked:
                 selected_for_generation.append(obj)
 
-        if st.button("Generate Selected Objects", type="primary"):
+        if st.button("Add Selected Objects", type="primary"):
             if not selected_for_generation:
                 st.warning("Select at least one object.")
             else:
-                with st.spinner("Generating selected object images..."):
+                with st.spinner("Adding selected objects..."):
                     gen_client = init_generate_client(ENV_PATH)
                     generated_results = []
 
@@ -267,10 +267,10 @@ if st.session_state.detected_objects is not None:
                 st.rerun()
 
 if st.session_state.generation_done and st.session_state.generated_results:
-    st.subheader("2. Generated Images")
+    st.subheader("2. Selected Objects")
     render_generated_grid(st.session_state.generated_results)
 
-    st.subheader("3. Select Generated Images for Metadata")
+    st.subheader("3. Select Objects to add details")
 
     selected_for_metadata_ids = []
     for result in st.session_state.generated_results:
@@ -281,11 +281,11 @@ if st.session_state.generation_done and st.session_state.generated_results:
         if checked:
             selected_for_metadata_ids.append(result["object_id"])
 
-    if st.button("Generate Metadata for Selected Images", type="primary"):
+    if st.button("Retrieve data for Selected Objects", type="primary"):
         if not selected_for_metadata_ids:
             st.warning("Select at least one generated image.")
         else:
-            with st.spinner("Generating metadata..."):
+            with st.spinner("Getting Data..."):
                 updated_results = []
 
                 for result in st.session_state.generated_results:
@@ -310,7 +310,7 @@ if st.session_state.metadata_done and st.session_state.generated_results:
     metadata_results = [r for r in st.session_state.generated_results if r.get("metadata")]
 
     if metadata_results:
-        st.subheader("4. Final Results")
+        st.subheader("4. Asset Insights")
         for result in metadata_results:
             display_generated_card(result)
 
@@ -322,7 +322,7 @@ if st.session_state.generated_results and st.session_state.uploaded_image_path:
     base_name = os.path.splitext(os.path.basename(st.session_state.uploaded_image_path))[0]
 
     st.download_button(
-        "Download Images + Metadata",
+        "Download Images + Data",
         data=zip_file,
         file_name=f"{base_name}_results.zip",
         mime="application/zip"
