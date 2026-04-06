@@ -7,323 +7,373 @@ from io import BytesIO
 import streamlit as st
 from PIL import Image
 from pathlib import Path
+from dotenv import load_dotenv
+from google import genai
+import asyncio
+import time
 
-from detect_objects import init_client as init_detect_client, detect_objects
-from generate_object import init_client as init_generate_client, generate_object_image, safe_name
+from detect_objects import detect_objects, resize_image
+from generate_object import generate_object_image, safe_name
 from generate_metadata import generate_metadata
 
+# ---------------- INIT ----------------
 dir = Path(os.getcwd())
+ENV_PATH: Path = dir / '.env'
 
-# Load environment variables from .env file
-ENV_PATH :Path= dir / '.env'
+load_dotenv(ENV_PATH)
+api_key = os.getenv("GEMINI_API_KEY")
+client = genai.Client(api_key=api_key)
 
-st.set_page_config(page_title="Multiple Object Detection - D'kluter", layout="wide")
+st.set_page_config(page_title="D'kluter AI Studio", layout="wide")
 
+# ---------------- SESSION ----------------
 def ensure_session_state():
     defaults = {
-        "uploaded_image_path": None,
         "uploaded_image_pil": None,
         "detected_objects": None,
         "generated_results": [],
         "temp_dir": None,
-        "last_uploaded_name": None,
         "generation_done": False,
         "metadata_done": False,
     }
-    for key, value in defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = value
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
 
-def reset_state():
-    for key in [
-        "uploaded_image_path",
-        "uploaded_image_pil",
-        "detected_objects",
-        "generated_results",
-        "temp_dir",
-        "last_uploaded_name",
-        "generation_done",
-        "metadata_done",
-    ]:
-        if key in st.session_state:
-            del st.session_state[key]
-    ensure_session_state()
-
-def save_uploaded_file(uploaded_file: str, temp_dir: str) -> str:
-    path = os.path.join(temp_dir, uploaded_file.name)
-    with open(path, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-    return path
-
-def display_tags(tags):
-    st.markdown("**Tags:**")
-    if not tags:
-        st.write("No tags")
-        return
-    for i, tag in enumerate(tags, 1):
-        st.markdown(f"**Tag {i}:**")
-        if isinstance(tag, dict):
-            st.code("\n".join([f"{k}: {v}" for k, v in tag.items()]))
-        else:
-            st.code(str(tag))
-
-def display_fields(fields):
-    st.markdown("**Fields:**")
-    if not fields:
-        st.write("No fields")
-        return
-    for i, field in enumerate(fields, 1):
-        st.markdown(f"**Field {i}:**")
-        if isinstance(field, dict):
-            st.code("\n".join([f"{k}: {v}" for k, v in field.items()]))
-        else:
-            st.code(str(field))
-
-def display_generated_card(result):
-    metadata = result.get("metadata", {})
-
-    st.markdown(f"### {result.get('object_id', '')} — {result.get('object_name', '')}")
-    img_col, info_col, field_col = st.columns([1, 2, 2])
-
-    with img_col:
-        image_path = result.get("image_path")
-        if image_path and os.path.exists(image_path):
-            st.image(image_path, width=200)
-
-    with info_col:
-        st.write(f"**Name:** {result.get('object_name', '')}")
-        st.write(f"**Position:** {result.get('position_hint', '')}")
-
-        if metadata:
-            st.write(f"**Title:** {metadata.get('Title', '')}")
-            st.write(f"**Description:** {metadata.get('Description', '')}")
-            display_tags(metadata.get("Tags", []))
-
-    with field_col:
-        if metadata:
-            display_fields(metadata.get("Fields", []))
-
-    st.markdown("---")
-
-def render_generated_grid(results):
-    cols_per_row = 2
-    total = len(results)
-    rows = math.ceil(total / cols_per_row)
-
-    for row_idx in range(rows):
-        cols = st.columns(cols_per_row)
-        for col_idx in range(cols_per_row):
-            item_idx = row_idx * cols_per_row + col_idx
-            if item_idx >= total:
-                continue
-
-            result = results[item_idx]
-            with cols[col_idx]:
-                st.markdown(f"**{result['object_name']}**")
-                st.caption(f"Position: {result['position_hint']}")
-
-                if result.get("image_path") and os.path.exists(result["image_path"]):
-                    st.image(result["image_path"], use_container_width=True)
-
-def create_download_zip(results, original_image_path):
-    zip_buffer = BytesIO()
-    base_name = os.path.splitext(os.path.basename(original_image_path))[0]
-    final_metadata = []
-    used_names = set()
-
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-        for idx, res in enumerate(results, 1):
-            image_path = res.get("image_path")
-            obj_name = res.get("object_name", f"object_{idx}")
-            safe_obj_name = safe_name(obj_name)
-            stub = f"{base_name}_{safe_obj_name}"
-
-            if stub in used_names:
-                stub = f"{stub}_{idx}"
-            used_names.add(stub)
-
-            ext = os.path.splitext(image_path)[1] if image_path else ".png"
-            ext = ext or ".png"
-            image_name = f"{stub}{ext}"
-
-            if image_path and os.path.exists(image_path):
-                zf.write(image_path, f"images/{image_name}")
-
-            if res.get("metadata"):
-                metadata = res["metadata"]
-                final_metadata.append({
-                    "object_id": res.get("object_id"),
-                    "object_name": res.get("object_name"),
-                    "position_hint": res.get("position_hint"),
-                    "image_name": image_name,
-                    "title": metadata.get("Title", ""),
-                    "description": metadata.get("Description", ""),
-                    "tags": metadata.get("Tags", []),
-                    "fields": metadata.get("Fields", [])
-                })
-
-        metadata_filename = f"{base_name}_metadata.json"
-        zf.writestr(metadata_filename, json.dumps(final_metadata, indent=2, ensure_ascii=False))
-
-    zip_buffer.seek(0)
-    return zip_buffer
-
-st.title("D’kluter Multi-Object AI Studio")
 ensure_session_state()
 
-with st.sidebar:
-    st.header("Settings")
-    enable_search_tool = st.checkbox("Enable Google Search Tool", value=True)
+# ---------------- ASYNC STREAM GENERATION ----------------
+async def run_generation(image, selected_objs, temp_dir, placeholder):
+    tasks = []
 
-    if st.button("Reset"):
-        reset_state()
-        st.rerun()
+    for obj in selected_objs:
+        path = os.path.join(
+            temp_dir,
+            f"{obj['object_id']}_{safe_name(obj['object_name'])}.png"
+        )
 
-uploaded_file = st.file_uploader(
-    "Upload one input image",
-    type=["png", "jpg", "jpeg", "webp"]
-)
+        async def task_wrapper(o=obj, p=path):
+            t = await generate_object_image(client, image, o, p)
+            return o, p, t  # ✅ bundle everything
 
-if uploaded_file is not None:
+        tasks.append(asyncio.create_task(task_wrapper()))
+
+    results = []
+    total_time = 0
+
+    for completed in asyncio.as_completed(tasks):
+        obj, path, gen_time = await completed
+
+        total_time += gen_time
+
+        result = {
+            **obj,
+            "image_path": path,
+            "gen_time": gen_time,
+            "metadata": {}
+        }
+
+        results.append(result)
+
+        # 🔥 STREAM UI
+        with placeholder.container():
+            st.subheader("⚡ Live Generation")
+            for r in results:
+                st.image(r["image_path"], width=150)
+                st.write(f"{r['object_name']} → {r['gen_time']:.2f}s")
+
+    return results, total_time
+
+# ---------------- ASYNC STREAM METADATA ----------------
+async def run_metadata(selected_results, enable_search, placeholder):
+    tasks = []
+
+    for r in selected_results:
+        img = Image.open(r["image_path"])
+
+        async def task_wrapper(res=r, image=img):
+            m = await generate_metadata(
+                client,
+                image=image,
+                obj=res,
+                search_tool=enable_search
+            )
+            return res["object_id"], m
+
+        tasks.append(asyncio.create_task(task_wrapper()))
+
+    results_map = {}
+
+    for completed in asyncio.as_completed(tasks):
+        obj_id, meta = await completed
+
+        results_map[obj_id] = meta
+
+        # 🔥 STREAM UI
+        with placeholder.container():
+            st.subheader("⚡ Live Metadata")
+            for oid, m in results_map.items():
+                st.write(
+                    f"{oid} → {m['Time Taken']:.2f}s | "
+                    f"Tokens: {m['Output Token Count']} | "
+                    f"Search: {m['Search Tool Used']}"
+                )
+
+    return results_map
+
+# ---------------- UI ----------------
+st.title("D’kluter Multi-Object AI Studio")
+
+enable_search = st.sidebar.checkbox("Enable Search", True)
+
+uploaded = st.file_uploader("Upload Image", type=["png", "jpg", "jpeg"])
+
+if uploaded:
     if st.session_state.temp_dir is None:
         st.session_state.temp_dir = tempfile.mkdtemp()
 
-    if st.session_state.last_uploaded_name != uploaded_file.name:
-        saved_path = save_uploaded_file(uploaded_file, st.session_state.temp_dir)
-        st.session_state.uploaded_image_path = saved_path
-        st.session_state.uploaded_image_pil = Image.open(saved_path)
-        st.session_state.detected_objects = None
-        st.session_state.generated_results = []
-        st.session_state.generation_done = False
-        st.session_state.metadata_done = False
-        st.session_state.last_uploaded_name = uploaded_file.name
+    path = os.path.join(st.session_state.temp_dir, uploaded.name)
+    with open(path, "wb") as f:
+        f.write(uploaded.getbuffer())
 
-    st.image(st.session_state.uploaded_image_pil, caption="Input Image", width=320)
+    img = Image.open(path)
+    st.image(img, width=300)
 
-    if st.session_state.detected_objects is None:
-        if st.button("Identify Objects", type="primary"):
-            with st.spinner("Detecting objects..."):
-                client = init_detect_client(ENV_PATH)
-                st.session_state.detected_objects = detect_objects(
-                    client,
-                    st.session_state.uploaded_image_pil
-                )
-                st.session_state.generated_results = []
-                st.session_state.generation_done = False
-                st.session_state.metadata_done = False
-            st.rerun()
+    img_resized = resize_image(img)
 
-if st.session_state.detected_objects is not None:
-    detected_objects = st.session_state.detected_objects
+    st.session_state.uploaded_image_pil = img_resized
 
-    if not detected_objects:
-        st.warning("No objects detected.")
-    else:
-        st.subheader("1. Generate images for selected objects")
-
-        selected_for_generation = []
-        for obj in detected_objects:
-            checked = st.checkbox(
-                f"{obj['object_name']} — {obj['position_hint']}",
-                key=f"gen_select_{obj['object_id']}"
-            )
-            if checked:
-                selected_for_generation.append(obj)
-
-        if st.button("Generate images for selected objects", type="primary"):
-            if not selected_for_generation:
-                st.warning("Select at least one object.")
-            else:
-                with st.spinner("Adding selected objects..."):
-                    gen_client = init_generate_client(ENV_PATH)
-                    generated_results = []
-
-                    for obj in selected_for_generation:
-                        generated_path = os.path.join(
-                            st.session_state.temp_dir,
-                            f"{obj['object_id']}_{safe_name(obj['object_name'])}_generated.png"
-                        )
-
-                        generate_object_image(
-                            client=gen_client,
-                            reference_image=st.session_state.uploaded_image_pil,
-                            obj=obj,
-                            output_path=generated_path
-                        )
-
-                        generated_results.append({
-                            "object_id": obj["object_id"],
-                            "object_name": obj["object_name"],
-                            "short_description": obj["short_description"],
-                            "position_hint": obj["position_hint"],
-                            "status": "generated",
-                            "image_path": generated_path,
-                            "metadata": {}
-                        })
-
-                    st.session_state.generated_results = generated_results
-                    st.session_state.generation_done = True
-                    st.session_state.metadata_done = False
-                st.rerun()
-
-if st.session_state.generation_done and st.session_state.generated_results:
-    st.subheader("2. Selected Objects")
-    render_generated_grid(st.session_state.generated_results)
-
-    st.subheader("3. Select Objects to Add Details")
-
-    selected_for_metadata_ids = []
-    for result in st.session_state.generated_results:
-        checked = st.checkbox(
-            f"{result['object_name']} — {result['position_hint']}",
-            key=f"meta_select_{result['object_id']}"
+# ---------------- DETECTION ----------------
+if st.button("Detect Objects"):
+    with st.spinner("Detecting..."):
+        objects, detect_time = asyncio.run(
+            detect_objects(client, st.session_state.uploaded_image_pil)
         )
-        if checked:
-            selected_for_metadata_ids.append(result["object_id"])
 
-    if st.button("Retrieve data for Selected Objects", type="primary"):
-        if not selected_for_metadata_ids:
-            st.warning("Select at least one generated image.")
-        else:
-            with st.spinner("Getting Data..."):
-                updated_results = []
+        st.session_state.detected_objects = objects
+        st.write(f"Detection Time: {detect_time:.2f}s")
 
-                for result in st.session_state.generated_results:
-                    if result["object_id"] in selected_for_metadata_ids:
-                        generated_img = Image.open(result["image_path"])
-                        metadata_result = generate_metadata(
-                            image=generated_img,
-                            obj=result,
-                            search_tool=enable_search_tool
-                        )
-                        updated = dict(result)
-                        updated["metadata"] = metadata_result
-                        updated_results.append(updated)
-                    else:
-                        updated_results.append(result)
+# ---------------- GENERATION ----------------
+if st.session_state.detected_objects:
+    st.subheader("Select Objects")
 
-                st.session_state.generated_results = updated_results
-                st.session_state.metadata_done = True
-            st.rerun()
+    selected = []
+    for obj in st.session_state.detected_objects:
+        if st.checkbox(obj["object_name"], key=obj["object_id"]):
+            selected.append(obj)
 
-if st.session_state.metadata_done and st.session_state.generated_results:
-    metadata_results = [r for r in st.session_state.generated_results if r.get("metadata")]
+    if st.button("Generate"):
+        placeholder = st.empty()
 
-    if metadata_results:
-        st.subheader("4. Asset Insights")
-        for result in metadata_results:
-            display_generated_card(result)
+        with st.spinner("Generating (streaming)..."):
+            start = time.time()
 
-if st.session_state.generated_results and st.session_state.uploaded_image_path:
-    zip_file = create_download_zip(
-        st.session_state.generated_results,
-        st.session_state.uploaded_image_path
-    )
-    base_name = os.path.splitext(os.path.basename(st.session_state.uploaded_image_path))[0]
+            results, total = asyncio.run(
+                run_generation(
+                    st.session_state.uploaded_image_pil,
+                    selected,
+                    st.session_state.temp_dir,
+                    placeholder
+                )
+            )
+            placeholder.empty()
 
+            avg = total / len(results)
+
+            st.session_state.generated_results = results
+            st.session_state.gen_total = total
+            st.session_state.gen_avg = avg
+            st.session_state.generation_done = True
+
+    if st.session_state.generation_done:
+        st.write(f"Total Gen Time: {st.session_state.gen_total:.2f}s")
+        st.write(f"Avg Time/Image: {st.session_state.gen_avg:.2f}s")
+
+        # 🔥 PERSISTENT GRID (THIS FIXES DISAPPEAR ISSUE)
+        results = st.session_state.generated_results
+
+        cols_per_row = 3
+        rows = math.ceil(len(results) / cols_per_row)
+
+        for i in range(rows):
+            cols = st.columns(cols_per_row)
+
+            for j in range(cols_per_row):
+                idx = i * cols_per_row + j
+                if idx >= len(results):
+                    continue
+
+                r = results[idx]
+
+                with cols[j]:
+                    with st.container(border=True):
+                        st.image(r["image_path"], use_container_width=True)
+                        st.success(r["object_name"])
+
+                        if r.get("gen_time"):
+                            st.write(f"⚡ {r['gen_time']:.2f}s")
+
+# ---------------- METADATA ----------------
+if st.session_state.generation_done:
+    st.subheader("Select for Metadata")
+
+    selected_ids = []
+    for r in st.session_state.generated_results:
+        if st.checkbox(f"Meta: {r['object_name']}", key=f"m_{r['object_id']}"):
+            selected_ids.append(r["object_id"])
+
+    if st.button("Generate Metadata"):
+        placeholder = st.empty()
+
+        selected_results = [
+            r for r in st.session_state.generated_results
+            if r["object_id"] in selected_ids
+        ]
+
+        with st.spinner("Metadata streaming..."):
+            start = time.time()
+
+            results_map = asyncio.run(
+                run_metadata(
+                    selected_results,
+                    enable_search,
+                    placeholder
+                )
+            )
+
+            total = time.time() - start
+            avg = total / len(results_map)
+
+            updated = []
+            for r in st.session_state.generated_results:
+                if r["object_id"] in results_map:
+                    r["metadata"] = results_map[r["object_id"]]
+                updated.append(r)
+
+            st.session_state.generated_results = updated
+            st.session_state.meta_total = total
+            st.session_state.meta_avg = avg
+            st.session_state.metadata_done = True
+
+    if st.session_state.metadata_done:
+        st.write(f"Metadata Total: {st.session_state.meta_total:.2f}s")
+        st.write(f"Avg Metadata: {st.session_state.meta_avg:.2f}s")
+
+        results = st.session_state.generated_results
+
+        cols_per_row = 2
+        total = len(results)
+        rows = math.ceil(total / cols_per_row)
+
+        for i in range(rows):
+            cols = st.columns(cols_per_row)
+
+            for j in range(cols_per_row):
+                idx = i * cols_per_row + j
+                if idx >= total:
+                    continue
+
+                r = results[idx]
+
+                if not r.get("metadata"):
+                    continue
+
+                m = r["metadata"]
+
+                with cols[j]:
+                    with st.container(border=True):
+
+                        # 🔥 HEADER
+                        st.markdown(f"### {r['object_name']}")
+
+                        # 🔥 IMAGE
+                        st.image(r["image_path"], use_container_width=True)
+
+                        # 🔥 GEN TIME
+                        if r.get("gen_time") is not None:
+                            st.success(f"⚡ Gen Time: {r['gen_time']:.2f}s")
+
+                        # 🔥 META STATS
+                        c1, c2 = st.columns(2)
+
+                        with c1:
+                            st.info(f"⏱ Meta: {m['Time Taken']:.2f}s")
+                            st.info(f"📥 Input: {m['Input Token Count']}")
+
+                        with c2:
+                            st.info(f"📤 Output: {m['Output Token Count']}")
+                            st.info(f"🔍 Search: {m['Search Tool Used']}")
+
+                        # 🔥 TITLE + DESC
+                        st.markdown("#### 🧾 Details")
+                        st.success(f"**Title:** {m['Title']}")
+                        st.info(f"**Desc:** {m['Description']}")
+
+                        # 🔥 TAGS (BOXED)
+                        if m.get("Tags"):
+                            st.markdown("#### 🏷 Tags")
+                            for tag in m["Tags"]:
+                                with st.container(border=True):
+                                    for k, v in tag.items():
+                                        st.write(f"**{k}:** {v}")
+
+                        # 🔥 FIELDS (BOXED)
+                        if m.get("Fields"):
+                            st.markdown("#### 📦 Fields")
+                            for field in m["Fields"]:
+                                with st.container(border=True):
+                                    for k, v in field.items():
+                                        st.write(f"**{k}:** {v}")
+
+# ---------------- DOWNLOAD ----------------
+if st.session_state.generated_results:
+    results = st.session_state.generated_results
+
+    buf = BytesIO()
+    final_metadata = []
+
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+
+        # 🔥 ADD IMAGES
+        for r in results:
+            if r.get("image_path") and os.path.exists(r["image_path"]):
+                filename = os.path.basename(r["image_path"])
+                z.write(r["image_path"], f"images/{filename}")
+
+            # 🔥 ADD METADATA
+            if r.get("metadata"):
+                m = r["metadata"]
+
+                final_metadata.append({
+                    "object_id": r.get("object_id"),
+                    "object_name": r.get("object_name"),
+                    "position_hint": r.get("position_hint"),
+                    "image_name": os.path.basename(r.get("image_path", "")),
+
+                    "title": m.get("Title"),
+                    "description": m.get("Description"),
+                    "tags": m.get("Tags", []),
+                    "fields": m.get("Fields", []),
+
+                    "gen_time": r.get("gen_time"),
+                    "metadata_time": m.get("Time Taken"),
+                    "input_tokens": m.get("Input Token Count"),
+                    "output_tokens": m.get("Output Token Count"),
+                    "search_used": m.get("Search Tool Used"),
+                })
+
+        # 🔥 ADD JSON
+        z.writestr(
+            "metadata.json",
+            json.dumps(final_metadata, indent=2, ensure_ascii=False)
+        )
+
+    buf.seek(0)
+
+    # ✅ SINGLE CLICK DOWNLOAD
     st.download_button(
-        "Download Images + Data",
-        data=zip_file,
-        file_name=f"{base_name}_results.zip",
+        label="⬇️ Download Results (Images + Metadata)",
+        data=buf,
+        file_name="results.zip",
         mime="application/zip"
     )

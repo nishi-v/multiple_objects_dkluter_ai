@@ -1,32 +1,31 @@
 import os
 import re
-from typing import Dict, Union
+from typing import Dict
 from PIL import Image
-from dotenv import load_dotenv
-from pathlib import Path
-from google import genai
 from google.genai import types
 from google.genai.client import Client
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+import time
 
+thread_pool = ThreadPoolExecutor(max_workers=20)
 
-def init_client(env_path:Union[Path, str]) -> Client:
-    load_dotenv(env_path)
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        raise ValueError("GEMINI_API_KEY not found in environment or .env")
-    return genai.Client(api_key=api_key)
-
+# def init_client(env_path:Union[Path, str]) -> Client:
+#     load_dotenv(env_path)
+#     api_key = os.getenv("GEMINI_API_KEY")
+#     if not api_key:
+#         raise ValueError("GEMINI_API_KEY not found in environment or .env")
+#     return genai.Client(api_key=api_key)
 
 def safe_name(name: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_-]+", "_", name).strip("_")
 
-
-def generate_object_image(
+async def generate_object_image(
     client: Client,
     reference_image: Image.Image,
     obj: Dict[str, str],
     output_path: str
-) -> None:
+) ->float:
     prompt = f"""
 Use the original input image to identify the target object.
 
@@ -62,15 +61,25 @@ Rules:
 Absolute priority:
 - Exact same object from the original input image with zero visible changes.
 """
+    
+    start_time_gen_obj = time.time()
+    loop = asyncio.get_running_loop()
 
-    response = client.models.generate_content(
-        model="gemini-3.1-flash-image-preview",
-        contents=[prompt, reference_image],
-        config=types.GenerateContentConfig(
-            response_modalities=["IMAGE"],
-            image_config=types.ImageConfig(image_size="512")
-        )
+    response = await asyncio.wait_for(
+        loop.run_in_executor(
+            thread_pool,
+            lambda: client.models.generate_content(
+                model="gemini-3.1-flash-image-preview",
+                contents=[prompt, reference_image],
+                config=types.GenerateContentConfig(
+                    response_modalities=["IMAGE"],
+                    image_config=types.ImageConfig(image_size="512")
+                )
+            )
+        ),
+        timeout = 180    
     )
+    end_time_gen_obj = time.time() - start_time_gen_obj
 
     for candidate in response.candidates:
         for part in candidate.content.parts:
@@ -78,6 +87,6 @@ Absolute priority:
             if inline_data and inline_data.data:
                 with open(output_path, "wb") as f:
                     f.write(inline_data.data)
-                return
+                return end_time_gen_obj
 
     raise ValueError(f"No image returned for {obj['object_id']}")

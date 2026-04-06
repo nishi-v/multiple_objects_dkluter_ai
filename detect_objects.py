@@ -1,24 +1,41 @@
-import os
 import re
 import json
-from typing import List, Dict, Union
+from typing import List, Dict
 from PIL import Image
-from dotenv import load_dotenv
-from pathlib import Path
-from google import genai
 from google.genai import types
 from google.genai.client import Client
 from google.genai.types import Tool, GoogleSearch
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+import time
 
-def init_client(env_path: Union[Path, str]) -> Client:
-    load_dotenv(env_path)
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        raise ValueError("GEMINI_API_KEY not found in environment or .env")
-    return genai.Client(api_key=api_key)
+thread_pool = ThreadPoolExecutor(max_workers=20)
 
+# dir = Path(os.getcwd())
 
-def detect_objects(client: Client, image: Image.Image) -> List[Dict[str, str]]:
+# # Load environment variables from .env file
+# ENV_PATH :Path= dir / '.env'
+
+# load_dotenv(ENV_PATH)
+# api_key = os.getenv("GEMINI_API_KEY")
+# if not api_key:
+#     raise ValueError("GEMINI_API_KEY not found in environment or .env")
+# client = genai.Client(api_key=api_key)
+def resize_image(image: Image.Image, max_side: int = 768) -> Image.Image:
+    width, height = image.size
+
+    # already small enough
+    if max(width, height) <= max_side:
+        return image
+
+    scale = max_side / max(width, height)
+
+    new_width = int(width * scale)
+    new_height = int(height * scale)
+
+    return image.resize((new_width, new_height), Image.LANCZOS)
+
+async def detect_objects(client: Client, image: Image.Image) -> tuple[List[Dict[str, str]], float]:
     prompt = """
 Analyze the original input image and detect the main visible objects.
 
@@ -54,15 +71,24 @@ Output:
     google_search_tool = Tool(
         google_search=GoogleSearch(),
     )
+    start_time_detect_objects = time.time()
+    loop = asyncio.get_running_loop()
 
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=[image, prompt],
-        config=types.GenerateContentConfig(
-            temperature=0.02,
-            tools=[google_search_tool]
-        )
+    response = await asyncio.wait_for(
+        loop.run_in_executor(
+            thread_pool,
+            lambda: client.models.generate_content(
+                model="gemini-2.5-flash-lite",
+                contents=[image, prompt],
+                config=types.GenerateContentConfig(
+                    temperature=0.02,
+                    # tools=[google_search_tool]
+                )
+            )
+        ),
+        timeout=40
     )
+    end_time_detect_objects = time.time() - start_time_detect_objects
 
     response_text = response.text.strip()
 
@@ -113,4 +139,4 @@ Output:
             "position_hint": position_hint
         })
 
-    return objects
+    return objects, end_time_detect_objects

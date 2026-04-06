@@ -1,27 +1,27 @@
-import os
 import re
 import json
-from typing import Dict, Any, Optional, Union
+from typing import Dict, Any, Optional
 from PIL import Image
-from dotenv import load_dotenv
-from pathlib import Path
-from google import genai
 from google.genai import types
 from google.genai.types import Tool, GoogleSearch
 from google.genai.client import Client
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+import time
 
-dir = Path(os.getcwd())
+thread_pool = ThreadPoolExecutor(max_workers=20)
 
-# Load environment variables from .env file
-ENV_PATH :Path= dir / '.env'
+# dir = Path(os.getcwd())
 
-def init_client(env_path:Union[Path, str]) -> Client:
-    load_dotenv(env_path)
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        raise ValueError("GEMINI_API_KEY not found in environment or .env")
-    return genai.Client(api_key=api_key)
+# # Load environment variables from .env file
+# ENV_PATH :Path= dir / '.env'
 
+# # def init_client(env_path:Union[Path, str]) -> Client:
+# load_dotenv(ENV_PATH)
+# api_key = os.getenv("GEMINI_API_KEY")
+# if not api_key:
+#     raise ValueError("GEMINI_API_KEY not found in environment or .env")
+# client = genai.Client(api_key=api_key)
 
 def build_auto_data_list(obj: Optional[Dict[str, str]] = None) -> dict:
     category = "Object"
@@ -65,12 +65,12 @@ def _extract_json_object(text: str) -> Dict[str, Any]:
     return json.loads(json_text)
 
 
-def generate_metadata(
+async def generate_metadata(
+    client: Client,
     image: Image.Image,
     obj: Optional[Dict[str, str]] = None,
     search_tool: bool = False
 ) -> Dict[str, Any]:
-    client = init_client(ENV_PATH)
     data_list = build_auto_data_list(obj)
 
     prompt = f"""
@@ -128,40 +128,62 @@ Use this category and field guidance:
     if search_tool:
         google_search_tool = Tool(google_search=GoogleSearch())
         config = types.GenerateContentConfig(
-            temperature=0.0,
+            temperature=0.02,
+            seed=42,
             response_modalities=["TEXT"],
             tools=[google_search_tool],
         )
+    start_time_metadata_extract = time.time()
+    loop = asyncio.get_running_loop()
 
-    response = client.models.generate_content(
-        model="gemini-2.5-flash-lite",
-        contents=[image, prompt],
-        config=config
-    )
-
-    usage = response.usage_metadata
     input_token_count = 0
     cache_token_count = 0
     output_token_count = 0
 
-    if usage:
-        output_token_count = usage.candidates_token_count or 0
-        prompt_token_count = usage.prompt_token_count or 0
-        cache_token_count = usage.cached_content_token_count or 0
+    response = await asyncio.wait_for(
+        loop.run_in_executor(
+            thread_pool,
+            lambda: client.models.generate_content(
+            model="gemini-2.5-flash-lite",
+            contents=[image, prompt],
+            config=config
+            )
+        ),
+        timeout=40
+    )
+
+    end_time_metadata_extract = time.time() - start_time_metadata_extract
+    metadata = response.usage_metadata
+    # input_token_count = 0
+    # cache_token_count = 0
+    # output_token_count = 0
+
+    if metadata:
+        output_token_count = metadata.candidates_token_count or 0
+        prompt_token_count = metadata.prompt_token_count or 0
+        cache_token_count = metadata.cached_content_token_count or 0
         input_token_count = prompt_token_count - cache_token_count
 
-    parsed = _extract_json_object(response.text)
+    if response.candidates and response.candidates[0].grounding_metadata:
+        search_entry_point = response.candidates[0].grounding_metadata.search_entry_point
+    else:
+        search_entry_point = None
 
-    data = parsed.get("Data", {})
+    search_tool_used = "Yes" if search_entry_point else "No"
+
+    json_res = _extract_json_object(response.text)
+
+    data = json_res.get("Data", {})
     return {
         "Title": data.get("title", ""),
         "Description": data.get("description", ""),
         "Tags": data.get("tags", []),
         "Fields": data.get("fields", []),
-        "Json Response": parsed,
+        "Json Response": json_res,
         "Input Token Count": input_token_count,
         "Cached Token Count": cache_token_count,
         "Output Token Count": output_token_count,
-        "Search Tool Used": "Yes" if search_tool else "No",
-        "Cache Used": "No"
+        "Time Taken": end_time_metadata_extract,
+        "Search Tool Used": search_tool_used,
+        "Cache Used": "No" if cache_token_count == 0 else "Yes"
     }
