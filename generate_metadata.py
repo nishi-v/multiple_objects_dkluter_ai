@@ -11,18 +11,6 @@ import time
 
 thread_pool = ThreadPoolExecutor(max_workers=20)
 
-# dir = Path(os.getcwd())
-
-# # Load environment variables from .env file
-# ENV_PATH :Path= dir / '.env'
-
-# # def init_client(env_path:Union[Path, str]) -> Client:
-# load_dotenv(ENV_PATH)
-# api_key = os.getenv("GEMINI_API_KEY")
-# if not api_key:
-#     raise ValueError("GEMINI_API_KEY not found in environment or .env")
-# client = genai.Client(api_key=api_key)
-
 def build_auto_data_list(obj: Optional[Dict[str, str]] = None) -> dict:
     category = "Object"
     if obj and obj.get("object_name"):
@@ -132,6 +120,7 @@ Use this category and field guidance:
             seed=42,
             response_modalities=["TEXT"],
             tools=[google_search_tool],
+            # thinking_config=types.ThinkingConfig(thinking_budget=512)
         )
     start_time_metadata_extract = time.time()
     loop = asyncio.get_running_loop()
@@ -144,6 +133,7 @@ Use this category and field guidance:
         loop.run_in_executor(
             thread_pool,
             lambda: client.models.generate_content(
+            # model="gemini-3.1-flash-lite-preview",
             model="gemini-2.5-flash-lite",
             contents=[image, prompt],
             config=config
@@ -187,3 +177,146 @@ Use this category and field guidance:
         "Search Tool Used": search_tool_used,
         "Cache Used": "No" if cache_token_count == 0 else "Yes"
     }
+
+# import requests
+# import base64
+# import json
+# import time
+# import re
+# from PIL import Image
+# import os
+# from dotenv import load_dotenv
+
+# dir = os.getcwd()
+# ENV_PATH = os.path.join(dir, ".env")
+# load_dotenv(ENV_PATH)
+# OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+
+# def encode_image(image: Image.Image):
+#     import io
+#     buffer = io.BytesIO()
+#     image.save(buffer, format="JPEG", quality=70)
+#     return base64.b64encode(buffer.getvalue()).decode()
+
+
+# async def generate_metadata_fast(image, obj):
+#     data_list = build_auto_data_list(obj)
+
+#     base64_img = encode_image(image)
+
+#     prompt = f"""
+# You are an expert asset cataloger.
+
+# Analyze the image and return only valid JSON in exactly this structure:
+
+# {{
+#   "Data": {{
+#     "title": "short clear product title",
+#     "description": "clear factual description based only on visible details",
+#     "tags": [
+#       {{
+#         "tagValue": "",
+#         "tagType": "",
+#         "confidenceScore": "",
+#         "source": "visible in image"
+#       }}
+#     ],
+#     "fields": [
+#       {{
+#         "field_name": "",
+#         "field_type": "",
+#         "occurrence_type": "",
+#         "field_value": "",
+#         "confidenceScore": "",
+#         "source": "visible in image"
+#       }}
+#     ]
+#   }}
+# }}
+
+# Rules:
+# - Use only visible evidence from the image.
+# - Do not hallucinate.
+# - Do not mention background, lighting, camera angle, or condition unless directly relevant to product identity.
+# - Keep title short and useful.
+# - Keep description clean and factual.
+# - Tags must be simple and useful.
+# - Fill fields only when reasonably visible.
+# - If a value is not visible, leave it empty.
+# - Return JSON only.
+# - No markdown.
+# - No extra text.
+
+# Use this category and field guidance:
+# {json.dumps(data_list, ensure_ascii=False)}
+# """
+#     def sync_call():
+#         return requests.post(
+#             url="https://openrouter.ai/api/v1/chat/completions",
+#             headers={
+#                 "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+#                 "Content-Type": "application/json",
+#             },
+#             json={
+#                 "model": "x-ai/grok-4.1-fast",
+#                 "messages": [
+#                     {
+#                         "role": "user",
+#                         "content": [
+#                             {"type": "text", "text": prompt},
+#                             {
+#                                 "type": "image_url",
+#                                 "image_url": {
+#                                     "url": f"data:image/jpeg;base64,{base64_img}"
+#                                 }
+#                             }
+#                         ]
+#                     }
+#                 ],
+#                 "temperature": 0.3,
+#                 "max_tokens": 1000,
+#                 "reasoning": {"enabled": False}
+#             }
+#         )
+#     start = time.time()
+
+#     response = await asyncio.to_thread(sync_call)
+
+#     res = response.json()
+
+#     output = res["choices"][0]["message"]["content"].strip()
+
+#     # 🔥 CLEAN JSON
+#     if output.startswith("```"):
+#         output = re.sub(r"^```(?:json)?\s*", "", output)
+#         output = re.sub(r"\s*```$", "", output)
+
+#     try:
+#         data = json.loads(output)
+#     except:
+#         match = re.search(r"\{.*\}", output, re.DOTALL)
+#         if not match:
+#             raise ValueError("Invalid JSON from Grok metadata")
+#         data = json.loads(match.group(0))
+
+#     end = time.time() - start
+
+#     # 🔥 ADD PIPELINE METRICS (important for your UI)
+#     data["Time Taken"] = end
+#     data["Input Token Count"] = res.get("usage", {}).get("prompt_tokens", 0)
+#     data["Output Token Count"] = res.get("usage", {}).get("completion_tokens", 0)
+#     data["Search Tool Used"] = False
+
+#     data_block = data.get("Data", {})
+
+#     return {
+#         "Title": data_block.get("title", ""),
+#         "Description": data_block.get("description", ""),
+#         "Tags": data_block.get("tags", []),
+#         "Fields": data_block.get("fields", []),
+#         "Json Response": data,
+#         "Input Token Count": res.get("usage", {}).get("prompt_tokens", 0),
+#         "Output Token Count": res.get("usage", {}).get("completion_tokens", 0),
+#         "Time Taken": end,
+#         "Search Tool Used": "No"
+#     }

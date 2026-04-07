@@ -13,8 +13,10 @@ import asyncio
 import time
 
 from detect_objects import detect_objects, resize_image
+# from detect_objects import detect_objects_fast, resize_image
 from generate_object import generate_object_image, safe_name
 from generate_metadata import generate_metadata
+# from generate_metadata import generate_metadata_fast
 
 # ---------------- INIT ----------------
 dir = Path(os.getcwd())
@@ -98,6 +100,10 @@ async def run_metadata(selected_results, enable_search, placeholder):
                 obj=res,
                 search_tool=enable_search
             )
+            # m = await generate_metadata_fast(
+            #     image=image,
+            #     obj=res,
+            # )
             return res["object_id"], m
 
         tasks.append(asyncio.create_task(task_wrapper()))
@@ -144,22 +150,36 @@ if uploaded:
     st.session_state.uploaded_image_pil = img_resized
 
 # ---------------- DETECTION ----------------
-if st.button("Detect Objects"):
-    with st.spinner("Detecting..."):
-        objects, detect_time = asyncio.run(
-            detect_objects(client, st.session_state.uploaded_image_pil)
-        )
+if st.session_state.uploaded_image_pil is not None:
+    if st.button("Detect Objects"):
+        with st.spinner("Detecting..."):
+            start = time.time()
+            objects, detect_time = asyncio.run(
+                # detect_objects_fast(st.session_state.uploaded_image_pil)
+                detect_objects(client, st.session_state.uploaded_image_pil)
+            )
+            app_time = time.time() - start
 
-        st.session_state.detected_objects = objects
-        st.write(f"Detection Time: {detect_time:.2f}s")
+            st.session_state.detected_objects = objects
+            st.session_state.detect_app_time = app_time
 
+            st.write(f"Detection Time: {detect_time:.2f}s")
+        
+# if "detect_app_time" in st.session_state:
+#     st.success(f"Detection App Time: {st.session_state.detect_app_time:.2f}s")
 # ---------------- GENERATION ----------------
 if st.session_state.detected_objects:
     st.subheader("Select Objects")
 
     selected = []
     for obj in st.session_state.detected_objects:
-        if st.checkbox(obj["object_name"], key=obj["object_id"]):
+        label = (
+            f"object: {obj['object_name']}  |  "
+            f"location: {obj['position_hint']}"
+        )
+
+        if st.checkbox(label, key=obj["object_id"]):
+        # if st.checkbox(obj["object_name"], key=obj["object_id"]):
             selected.append(obj)
 
     if st.button("Generate"):
@@ -176,6 +196,7 @@ if st.session_state.detected_objects:
                     placeholder
                 )
             )
+            app_time = time.time() - start
             placeholder.empty()
 
             avg = total / len(results)
@@ -183,7 +204,11 @@ if st.session_state.detected_objects:
             st.session_state.generated_results = results
             st.session_state.gen_total = total
             st.session_state.gen_avg = avg
+            st.session_state.gen_app_time = app_time
             st.session_state.generation_done = True
+
+    # if "gen_app_time" in st.session_state:
+    #     st.success(f"Generation App Time: {st.session_state.gen_app_time:.2f}s")
 
     if st.session_state.generation_done:
         st.write(f"Total Gen Time: {st.session_state.gen_total:.2f}s")
@@ -219,7 +244,12 @@ if st.session_state.generation_done:
 
     selected_ids = []
     for r in st.session_state.generated_results:
-        if st.checkbox(f"Meta: {r['object_name']}", key=f"m_{r['object_id']}"):
+        label = (
+            f"object: {r['object_name']}  |  "
+            f"location: {r['position_hint']}"
+        )
+
+        if st.checkbox(label, key=f"m_{r['object_id']}"):
             selected_ids.append(r["object_id"])
 
     if st.button("Generate Metadata"):
@@ -241,8 +271,15 @@ if st.session_state.generation_done:
                 )
             )
 
-            total = time.time() - start
-            avg = total / len(results_map)
+            app_time = time.time() - start
+            meta_times = [
+                m["Time Taken"]
+                for m in results_map.values()
+                if m and "Time Taken" in m
+            ]
+
+            total_meta_time = sum(meta_times)
+            avg_meta_time = total_meta_time / len(meta_times) if meta_times else 0
 
             updated = []
             for r in st.session_state.generated_results:
@@ -251,9 +288,13 @@ if st.session_state.generation_done:
                 updated.append(r)
 
             st.session_state.generated_results = updated
-            st.session_state.meta_total = total
-            st.session_state.meta_avg = avg
+            st.session_state.meta_total = total_meta_time
+            st.session_state.meta_avg = avg_meta_time
+            st.session_state.meta_app_time = app_time
             st.session_state.metadata_done = True
+
+    # if "meta_app_time" in st.session_state:
+    #     st.success(f"Metadata App Time: {st.session_state.meta_app_time:.2f}s")
 
     if st.session_state.metadata_done:
         st.write(f"Metadata Total: {st.session_state.meta_total:.2f}s")
@@ -290,8 +331,8 @@ if st.session_state.generation_done:
                         st.image(r["image_path"], use_container_width=True)
 
                         # 🔥 GEN TIME
-                        if r.get("gen_time") is not None:
-                            st.success(f"⚡ Gen Time: {r['gen_time']:.2f}s")
+                        # if r.get("gen_time") is not None:
+                        #     st.success(f"⚡ Gen Time: {r['gen_time']:.2f}s")
 
                         # 🔥 META STATS
                         c1, c2 = st.columns(2)
@@ -324,6 +365,27 @@ if st.session_state.generation_done:
                                 with st.container(border=True):
                                     for k, v in field.items():
                                         st.write(f"**{k}:** {v}")
+
+# ---------------- APP TIMINGS ----------------
+detect = st.session_state.get("detect_app_time", 0)
+gen = st.session_state.get("gen_app_time", 0)
+meta = st.session_state.get("meta_app_time", 0)
+
+if detect or gen or meta:
+    st.markdown("## ⏱ App Performance")
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.success(f"Detection: {detect:.2f}s")
+
+    with col2:
+        st.success(f"Generation: {gen:.2f}s")
+
+    with col3:
+        st.success(f"Metadata: {meta:.2f}s")
+
+    total = detect + gen + meta
+    st.info(f"🚀 Total App Time: {total:.2f}s")
 
 # ---------------- DOWNLOAD ----------------
 if st.session_state.generated_results:

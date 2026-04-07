@@ -70,10 +70,14 @@ Absolute priority:
             thread_pool,
             lambda: client.models.generate_content(
                 model="gemini-3.1-flash-image-preview",
+                # model="gemini-2.5-flash-lite",
                 contents=[prompt, reference_image],
                 config=types.GenerateContentConfig(
+                    # service_tier=,
                     response_modalities=["IMAGE"],
-                    image_config=types.ImageConfig(image_size="512")
+                    image_config=types.ImageConfig(image_size="512"),
+                    # thinking_config=types.ThinkingConfig(thinking_level="low"),
+                    # thinking_config=types.ThinkingConfig(thinking_budget=0)
                 )
             )
         ),
