@@ -7,6 +7,7 @@ from io import BytesIO
 import streamlit as st
 from PIL import Image
 from pathlib import Path
+import time
 
 from detect_objects import init_client as init_detect_client, detect_objects
 from generate_object import init_client as init_generate_client, generate_object_image, safe_name
@@ -203,14 +204,17 @@ if uploaded_file is not None:
     if st.session_state.detected_objects is None:
         if st.button("Identify Objects", type="primary"):
             with st.spinner("Detecting objects..."):
+                start = time.time()
                 client = init_detect_client(ENV_PATH)
                 st.session_state.detected_objects = detect_objects(
                     client,
                     st.session_state.uploaded_image_pil
                 )
+                app_time = time.time() - start
                 st.session_state.generated_results = []
                 st.session_state.generation_done = False
                 st.session_state.metadata_done = False
+                st.session_state.detect_app_time = app_time
             st.rerun()
 
 if st.session_state.detected_objects is not None:
@@ -235,6 +239,7 @@ if st.session_state.detected_objects is not None:
                 st.warning("Select at least one object.")
             else:
                 with st.spinner("Adding selected objects..."):
+                    start = time.time()
                     gen_client = init_generate_client(ENV_PATH)
                     generated_results = []
 
@@ -261,9 +266,14 @@ if st.session_state.detected_objects is not None:
                             "metadata": {}
                         })
 
+                    app_time = time.time() - start
+
                     st.session_state.generated_results = generated_results
                     st.session_state.generation_done = True
                     st.session_state.metadata_done = False
+                    st.session_state.gen_app_time = app_time
+                    time_avg_gen = app_time / len(generated_results)
+                    st.write(f"Average time per object generation: {time_avg_gen:.2f}s")
                 st.rerun()
 
 if st.session_state.generation_done and st.session_state.generated_results:
@@ -288,6 +298,8 @@ if st.session_state.generation_done and st.session_state.generated_results:
             with st.spinner("Getting Data..."):
                 updated_results = []
 
+                start = time.time()
+
                 for result in st.session_state.generated_results:
                     if result["object_id"] in selected_for_metadata_ids:
                         generated_img = Image.open(result["image_path"])
@@ -302,8 +314,14 @@ if st.session_state.generation_done and st.session_state.generated_results:
                     else:
                         updated_results.append(result)
 
+                app_time = time.time() - start
+
                 st.session_state.generated_results = updated_results
+                st.session_state.meta_app_time = app_time
                 st.session_state.metadata_done = True
+
+                meta_avg_time = app_time / len(result)
+                st.write(f"Average time to generate metadata: {meta_avg_time:.2f}s")
             st.rerun()
 
 if st.session_state.metadata_done and st.session_state.generated_results:
@@ -313,6 +331,28 @@ if st.session_state.metadata_done and st.session_state.generated_results:
         st.subheader("4. Asset Insights")
         for result in metadata_results:
             display_generated_card(result)
+
+# ---------------- APP TIMINGS ----------------
+detect = st.session_state.get("detect_app_time", 0)
+gen = st.session_state.get("gen_app_time", 0)
+meta = st.session_state.get("meta_app_time", 0)
+
+if detect or gen or meta:
+    st.markdown("## ⏱ App Performance")
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.success(f"Detection: {detect:.2f}s")
+
+    with col2:
+        st.success(f"Generation: {gen:.2f}s")
+
+    with col3:
+        st.success(f"Metadata: {meta:.2f}s")
+
+    total = detect + gen + meta
+    st.info(f"🚀 Total App Time: {total:.2f}s")
+
 
 if st.session_state.generated_results and st.session_state.uploaded_image_path:
     zip_file = create_download_zip(

@@ -9,6 +9,7 @@ from google import genai
 from google.genai import types
 from google.genai.client import Client
 from google.genai.types import Tool, GoogleSearch
+import time
 
 def init_client(env_path: Union[Path, str]) -> Client:
     load_dotenv(env_path)
@@ -55,6 +56,7 @@ Output:
         google_search=GoogleSearch(),
     )
 
+    # start_time_detect_objects = time.time()
     response = client.models.generate_content(
         model="gemini-2.5-flash",
         contents=[image, prompt],
