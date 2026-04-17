@@ -27,41 +27,106 @@ async def generate_object_image(
     output_path: str
 ) ->float:
     prompt = f"""
-Use the original input image to identify the target object.
+Task:
+- Generate ONLY the selected object from the input image.
 
-Target object:
-- type: {obj['object_name']}
-- description: {obj['short_description']}
-- location: {obj['position_hint']}
+Input:
+- object_name: {obj['object_name']}
+- category: {obj.get('category', obj['object_name'])}
+- location: {obj.get('position_hint', '')}
 
-Generate only the target object from the original input image.
+Core rule:
+- First LOCATE the exact object using object_name + location.
+- Then USE that SAME object and COMPLETE it.
+- This is NOT full image generation.
+- This is PARTIAL EXTENSION of an existing object.
 
-Rules:
-- The original input image is the only source of truth.
-- Use the text only to help locate the object in the image.
-- If the text is wrong, incomplete, or slightly misleading, follow the actual visible object in the original input image.
-- Generate the exact same real object or exact same visible object group from the original input image.
-- Keep the exact same visible identity.
-- Keep the exact same visible color, shape, structure, material, texture, parts, details, and quantity.
-- Keep the same visible arrangement, grouping, overlap, spacing, proportions, and orientation.
-- Do not add anything.
-- Do not remove anything.
-- Do not replace anything.
-- Do not change anything.
-- Do not hallucinate any new part, feature, detail, hidden part, or extra element.
-- Do not include nearby, overlapping, top, bottom, inside, supporting, or background objects unless they are clearly part of the same target object.
-- If another separate object is touching, covering, overlapping, or stacked on the target, do not include it.
-- If part of the target is unclear or cropped, continue only the same object in the safest minimal way without inventing new visible design details.
-- Keep the result looking like the same object from the original input image, not a similar object.
-- Keep the result in a simple front view.
-- The full target object or full target group must be fully visible.
-- No cropping, no extra objects, no text, no watermark.
-- Use a plain clean contrasting background.
+Object selection (VERY IMPORTANT):
+- If multiple similar objects exist:
+  - Use location + color + pattern + size to identify correct instance.
+- MUST match exact object from image.
+- Do NOT switch to another similar object.
+- Do NOT reuse same object for different inputs.
 
-Absolute priority:
-- Exact same object from the original input image with zero visible changes.
+CRITICAL — Visible part (STRICT LOCK):
+- The visible part is FINAL and must NOT be changed.
+
+ZERO CHANGE allowed:
+- color (no correction, no shift)
+- texture (no smoothing or sharpening)
+- material
+- pattern / design
+- text / font / layout
+- folds / edges / shape
+
+STRICT:
+- Do NOT redraw it
+- Do NOT recreate it
+- Do NOT enhance or fix it
+- Do NOT rotate, align, or correct it
+- Treat it as FIXED and UNTOUCHABLE
+
+CRITICAL — Graphic/Text Lock:
+- Any printed graphics (book covers, labels, artwork) are PART OF VISIBLE REGION.
+- These must NOT be regenerated.
+
+STRICT:
+- Do NOT redraw cover design
+- Do NOT recreate typography
+- Do NOT approximate layout
+- Do NOT restyle graphics
+
+- Treat cover/label as an image patch and KEEP IT EXACT.
+
+NO STYLE CORRECTION:
+- Do NOT make it cleaner, sharper, brighter, or more realistic
+- Do NOT normalize colors or lighting
+- Keep original imperfections exactly
+
+Completion rule:
+- Generate ONLY missing (non-visible) parts
+- Extend outward from visible edges
+- Do NOT rebuild the object
+
+Completion must follow:
+- same color
+- same texture
+- same material
+- same pattern/design
+
+Think:
+- "continue the same object outward"
+- NOT "generate a new version"
+
+Text rule:
+- If object contains text:
+  - keep visible text EXACTLY same
+  - do NOT change font or layout
+  - do NOT replace with other text
+  - do NOT hallucinate missing text
+
+Anti-mixing (CRITICAL):
+- Do NOT mix features from other objects
+- Do NOT borrow colors, text, or patterns from nearby items
+- Do NOT create hybrid objects
+
+Identity rule:
+- Output must be SAME object instance
+- Not similar, not improved, not replaced
+
+Strict constraints:
+- No redesign
+- No style change
+- No structure change
+- Visible region = ZERO modification
+
+Output:
+- One object only
+- Fully completed
+- Clean plain background
+- No extra objects
 """
-    
+
     start_time_gen_obj = time.time()
     loop = asyncio.get_running_loop()
 
@@ -74,8 +139,9 @@ Absolute priority:
                 contents=[prompt, reference_image],
                 config=types.GenerateContentConfig(
                     # service_tier=,
+                    temperature=0.02,
                     response_modalities=["IMAGE"],
-                    image_config=types.ImageConfig(image_size="512"),
+                    image_config=types.ImageConfig(image_size="512", aspect_ratio="1:1"),
                     # thinking_config=types.ThinkingConfig(thinking_level="low"),
                     # thinking_config=types.ThinkingConfig(thinking_budget=0)
                 )
@@ -85,7 +151,13 @@ Absolute priority:
     )
     end_time_gen_obj = time.time() - start_time_gen_obj
 
+        # Guard against None response
+    if not response or not response.candidates:
+        raise ValueError(f"No candidates returned for {obj['object_id']}")
+
     for candidate in response.candidates:
+        if not candidate.content or not candidate.content.parts:
+            continue
         for part in candidate.content.parts:
             inline_data = getattr(part, "inline_data", None)
             if inline_data and inline_data.data:
@@ -93,4 +165,4 @@ Absolute priority:
                     f.write(inline_data.data)
                 return end_time_gen_obj
 
-    raise ValueError(f"No image returned for {obj['object_id']}")
+    raise ValueError(f"No image data found in response for {obj['object_id']}")
