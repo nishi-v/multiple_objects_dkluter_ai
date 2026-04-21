@@ -37,101 +37,171 @@ def dedupe_key(obj: Dict[str, str]) -> tuple:
 
 async def detect_objects(client: Client, image: Image.Image) -> tuple[List[Dict[str, str]], float]:
     prompt = """
-You are an object detection model.
+You are an expert universal visual object detection and identification model.
 
 Task:
-- Detect ALL objects present in the image.
-- Include objects even if partially visible, small, folded, overlapping, or occluded.
-- Do NOT miss objects.
+Detect the MAXIMUM number of real visible physical objects in the image and return ONLY a valid JSON array.
 
-For each object return:
-- object_name
-- category
-- object_id
-- short_description
-- position_hint
-- confidence_score
-- visibility_score
+PRIMARY GOALS:
+1. Detect as many real objects as possible.
+2. Include full, partial, cropped, overlapping, stacked, small, edge, and background objects when supported by visible evidence.
+3. Use Google Search to recover missing identity/details from visible clues.
+4. Prevent fake detections.
+5. Prevent duplicates.
+6. Never hallucinate.
 
-Detection rules:
-- Scan the FULL image (center, edges, corners).
-- Detect every distinct physical item.
-- If multiple similar objects exist, detect each separately.
-- Each detected object MUST be unique in position.
-- Do NOT return the same object multiple times.
-- NEVER mix attributes (text, color, pattern) between different objects
-- Each detected object must strictly correspond to one physical item
+DETECTION PRIORITY:
+- High recall is important.
+- Do NOT skip obvious or likely real objects.
+- If an object is reasonably supported by visible evidence, include it.
+- Use lower confidence for uncertain or partial objects instead of skipping.
 
-Object naming:
-- Identify object using BOTH:
-  - visible text/content
-  - position in image
+CORE OBJECT RULE:
+Detect an object when there is reasonable evidence of a separate physical item.
 
-CRITICAL:
-- When multiple similar objects exist (e.g., books):
-  - DO NOT mix titles between them
-  - DO NOT assign text from one object to another
-  - Each object must keep its own visible text
+Evidence may include:
+- edges
+- corners
+- surface area
+- shape
+- thickness
+- texture
+- material
+- readable text
+- logo
+- label
+- packaging
+- handle
+- wheel
+- strap
+- pages
+- spine
+- buttons
+- ports
+- distinct placement
 
-Text rule:
-- If text is visible → use ONLY that object's text
-- Do NOT guess from nearby objects
-- Do NOT autocomplete or replace text
+STRICT:
+- Text alone should not create a fake object.
+- Search alone should not create a fake object.
+- Reflection/shadow/pattern is not an object.
 
-Uncertainty:
-- If text is partially visible:
-  - use only visible portion OR generic name (e.g., "book")
-  - DO NOT guess full title incorrectly
+PARTIAL OBJECT RULE:
+- Full visibility is NOT required.
+- Detect partially visible objects.
+- Detect cropped border objects.
+- Detect hidden objects when enough visible clues exist.
+- Detect stacked and overlapping objects separately when evidence exists.
+- If only part is visible, still include it.
 
-Disambiguation:
-- Use position + color + layout to map correct name to correct object
+GOOGLE SEARCH RULE (IMPORTANT):
+Use Google Search aggressively but correctly when visible clues exist:
 
-Search usage:
-- Use search ONLY when:
-  - text, logo, or identifiable pattern is visible
-  - object appears recognizable but incomplete
-- Use search to CONFIRM, not to override.
-- If search conflicts with image → follow image.
+Use search for:
+- readable text
+- partial readable text
+- logo
+- brand mark
+- packaging style
+- model number
+- title
+- author name
+- distinctive product design
+- electronics design
+- known product shapes
 
-Disambiguation:
-- Use position, color, pattern, size to distinguish similar objects.
-- Ensure each object has correct identity based on its own visual features.
+Search can help recover:
+- missing names
+- missing brands
+- missing book titles
+- missing product identity
+- likely model/category
 
-Clothing rule:
-- If full structure visible → name specific (e.g., pants, shirt).
-- If folded/partial → use "garment" or "folded clothing".
+Search must support visible evidence.
+Search must not invent fake objects.
 
-Pair / group rule:
-- If objects naturally come in pairs (shoes, earrings):
-  - Detect as ONE object if both are together.
-  - If only one visible → detect as single item.
+TEXT RULE:
+- Use text on same object only.
+- Never borrow distant text.
+- Partial text may be used with search if physically attached to object.
 
-Separation rules:
-- Separate objects that are visually distinct.
-- Do NOT merge different items.
-- Do NOT detect the same object twice.
+GLOBAL SCAN RULE:
+Carefully inspect:
+- top
+- bottom
+- left
+- right
+- center
+- corners
+- foreground
+- background
+- shelves
+- stacks
+- piles
+- under overlaps
 
-Dense scene rule:
-- Carefully detect small, partially hidden, and overlapping objects.
-- Do NOT stop after detecting a few objects.
+Detect all categories:
+clothes, books, electronics, decor, toys, tools, bags, footwear, boxes, bottles, cosmetics, furniture items, stationery, appliances, sports items, containers, gadgets, plants, vehicles, pair of shoes, etc.
 
-Position:
-- Use simple location (top left, center, bottom right, etc).
+DUPLICATE RULE:
+- Detect each object once only.
+- Separate identical objects if physically separate.
 
-Scores:
-- confidence_score → how correct the label is
-- visibility_score → how visible the object is
-- Lower scores if object is unclear or occluded
+NAMING RULE:
+- If search strongly confirms identity, use specific name.
+- If not certain, use generic correct name.
+- Better to include generic real object than skip it.
 
-Critical rules:
-- Prefer detecting more objects rather than missing them.
-- Do NOT skip objects due to uncertainty.
-- If unsure → include with lower confidence and generic name.
+VISIBLE_DESCRIPTION RULE:
+Describe visible reality:
+- color
+- material
+- texture
+- shape
+- logo
+- text
+- graphics
+- pattern
+- design
+- wear
+- orientation
+- visible portion
 
-Output:
-- Return ONLY a valid JSON array
-- No markdown
-- No extra text
+POSITION VALUES:
+top left
+top center
+top right
+center left
+center
+center right
+bottom left
+bottom center
+bottom right
+
+OUTPUT:
+Return ONLY valid JSON array.
+
+Each item:
+{
+  "object_name": "",
+  "category": "",
+  "short_description": "",
+  "visible_description": "",
+  "position_hint": "",
+  "confidence_score": "",
+  "visibility_score": ""
+}
+
+FIELD RULES:
+- confidence_score = confidence object is correct (0-100)
+- visibility_score = how visible object is (0-100)
+
+FINAL RULES:
+- Missing obvious objects is bad.
+- Include supported partial objects.
+- Use search to fill missing info.
+- No markdown.
+- No explanation.
+- No extra text.
 """
 
     google_search_tool = Tool(
@@ -144,17 +214,16 @@ Output:
         loop.run_in_executor(
             thread_pool,
             lambda: client.models.generate_content(
-                # model="gemini-3.1-flash-lite-preview",
-                model="gemini-2.5-flash-lite",
+                model="gemini-2.5-flash",
                 contents=[image, prompt],
                 config=types.GenerateContentConfig(
-                    temperature=0.02,
+                    temperature=0.0,
                     # thinking_config=types.ThinkingConfig(thinking_budget=512),
                     tools=[google_search_tool]
                 )
             )
         ),
-        timeout=40
+        timeout=50
     )
     end_time_detect_objects = time.time() - start_time_detect_objects
 
@@ -181,6 +250,13 @@ Output:
             raise ValueError("Model did not return valid JSON array text.")
         data = json.loads(match.group(0))
 
+    if response.candidates and response.candidates[0].grounding_metadata:
+        search_entry_point = response.candidates[0].grounding_metadata.search_entry_point
+    else:
+        search_entry_point = None
+
+    search_tool_used = "Yes" if search_entry_point else "No"
+
     blocked = {
         "shelf", "shelves", "desk", "table", "floor", "wall",
         "background", "furniture", "surface", "counter", "rack"
@@ -192,7 +268,7 @@ Output:
     for obj in data:
         object_name = str(obj.get("object_name", "")).strip()
         short_description = str(obj.get("short_description", object_name)).strip()
-        # visible_description = str(obj.get("visible_description", object_name)).strip()
+        visible_description = str(obj.get("visible_description", object_name)).strip()
         position_hint = str(obj.get("position_hint", "")).strip()
         confidence_score = str(obj.get("confidence_score", "")).strip()
         visibility_score = str(obj.get("visibility_score", "")).strip()
@@ -221,129 +297,11 @@ Output:
             "category": category,
             "object_id": f"object_{len(objects)+1}",
             "short_description": short_description,
-            # "visible_description": visible_description,
+            "visible_description": visible_description,
             "position_hint": position_hint,
             "confidence_score": confidence_score,
-            "visibility_score": visibility_score
+            "visibility_score": visibility_score,
         })
 
 
-    return objects, end_time_detect_objects
-
-# import base64
-# from openai import OpenAI
-# from dotenv import load_dotenv
-# import os
-# import requests
-# dir = os.getcwd()
-# ENV_PATH = os.path.join(dir, ".env")
-# load_dotenv(ENV_PATH)
-# OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-
-# # client = OpenAI(
-# #     api_key=OPENROUTER_API_KEY,
-# #     base_url="https://openrouter.ai/api/v1"
-# # )
-
-# def encode_image(image):
-#     import io
-#     buffer = io.BytesIO()
-#     image.save(buffer, format="JPEG", quality=50)  # compress = faster
-#     return base64.b64encode(buffer.getvalue()).decode()
-
-# async def detect_objects_fast(image):
-
-#     base64_img = encode_image(image)
-
-#     prompt = """
-#  Analyze the original input image and detect the main visible objects.
-
-#  Rules:
-#  - Detect objects only from the original input image.
-#  - Use only clear visible evidence from the image.
-#  - object_name must correctly match the visible object.
-#  - short_description must contain only visible details of that same object.
-#  - Do not guess, assume, or hallucinate.
-#  - If exact identity is unclear, use a simple generic name that still matches the visible object.
-
-#  - Detect each real object only once.
-#  - Do not duplicate detections.
-#  - Do not split one real object into multiple detections if it visually reads as one object.
-#  - If multiple same-type items clearly appear as one group, detect them as one object group.
-#  - If items are placed inside, inserted into, stored in, or held by a holder, organizer, stand, tray, rack, box, cup, pot, or container, and together they visually read as one setup, detect them as one object.
-#  - If the holder/container and its contents are clearly being shown as one combined object, keep them together.
-#  - Separate objects only when they clearly appear as independent standalone objects.
-#  - If one object is simply placed on top of another but they still clearly look separate, detect them separately.
-
-#  - Look carefully at small objects, similar-looking objects, and partially visible objects before naming them.
-#  - Do not detect hidden or non-visible objects.
-#  - Ignore background, shadows, reflections, and support surfaces.
-
-#  Output:
-#  - Return only a valid JSON array.
-#  - No markdown.
-#  - No extra text.
-#  - Each item must have:
-#    object_name, object_id, short_description, position_hint
-#  """
-
-#     start = time.time()
-
-#     response = requests.post(
-#         url="https://openrouter.ai/api/v1/chat/completions",
-#         headers={
-#             "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-#             "Content-Type": "application/json",
-#         },
-#         json={  # ✅ use json= instead of data=
-#             "model": "x-ai/grok-4.1-fast",
-#             "messages": [
-#                 {
-#                     "role": "user",
-#                     "content": [
-#                         {"type": "text", "text": prompt},
-#                         {
-#                             "type": "image_url",
-#                             "image_url": {
-#                                 "url": f"data:image/jpeg;base64,{base64_img}"
-#                             }
-#                         }
-#                     ]
-#                 }
-#             ],
-#             "temperature": 0.0,              # 🔥 deterministic
-#             "max_tokens": 500,
-#             "reasoning": {"enabled": False}  # 🔥 faster
-#         }
-#     )
-
-#     res = response.json()
-
-#     output = res["choices"][0]["message"]["content"].strip()
-
-#     # 🔥 CLEAN RESPONSE
-#     if output.startswith("```"):
-#         output = re.sub(r"^```(?:json)?\s*", "", output)
-#         output = re.sub(r"\s*```$", "", output)
-
-#     try:
-#         data = json.loads(output)
-#     except:
-#         match = re.search(r"\[\s*{.*}\s*\]", output, re.DOTALL)
-#         if not match:
-#             raise ValueError("Invalid JSON")
-#         data = json.loads(match.group(0))
-
-#     # 🔥 NORMALIZE (match your app format)
-#     objects = []
-#     for i, obj in enumerate(data):
-#         objects.append({
-#             "object_name": obj.get("object_name", ""),
-#             "object_id": f"object_{i+1}",
-#             "short_description": obj.get("short_description", ""),
-#             "position_hint": obj.get("position_hint", "")
-#         })
-
-#     end = time.time() - start
-
-#     return objects, end
+    return objects, end_time_detect_objects, search_tool_used

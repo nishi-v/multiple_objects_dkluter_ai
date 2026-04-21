@@ -27,104 +27,110 @@ async def generate_object_image(
     output_path: str
 ) ->float:
     prompt = f"""
+You are an expert single-object completion model.
+
 Task:
-- Generate ONLY the selected object from the input image.
+Generate ONLY the selected object from the input image.
 
 Input:
 - object_name: {obj['object_name']}
 - category: {obj.get('category', obj['object_name'])}
-- location: {obj.get('position_hint', '')}
+- position_hint: {obj.get('position_hint', '')}
+- short_description: {obj.get('short_description', '')}
+- visible_description: {obj.get('visible_description', '')}
 
-Core rule:
-- First LOCATE the exact object using object_name + location.
-- Then USE that SAME object and COMPLETE it.
-- This is NOT full image generation.
-- This is PARTIAL EXTENSION of an existing object.
+PRIMARY RULE:
+- First visually locate the exact selected object inside the input image.
+- Use the real visible object in the image as the MAIN reference.
+- Then complete only the missing / hidden / cropped parts of that SAME object.
+- Do NOT generate a new version.
+- Do NOT replace with a similar object.
 
-Object selection (VERY IMPORTANT):
-- If multiple similar objects exist:
-  - Use location + color + pattern + size to identify correct instance.
-- MUST match exact object from image.
-- Do NOT switch to another similar object.
-- Do NOT reuse same object for different inputs.
+OBJECT MATCH RULE:
+Use all provided data to identify the correct object:
+- object_name
+- category
+- position_hint
+- short_description
+- visible_description
 
-CRITICAL — Visible part (STRICT LOCK):
-- The visible part is FINAL and must NOT be changed.
+If multiple similar objects exist:
+- choose the one matching position + color + shape + design + text clues.
 
-ZERO CHANGE allowed:
-- color (no correction, no shift)
-- texture (no smoothing or sharpening)
+REFERENCE PRIORITY:
+1. Input image visible object (highest priority)
+2. visible_description
+3. short_description
+4. object_name / category
+5. normal real-world knowledge for hidden parts only
+
+STRICT PRESERVATION RULE:
+The visible portion must remain true to the original object.
+
+Do NOT change visible:
+- color
 - material
-- pattern / design
-- text / font / layout
-- folds / edges / shape
+- texture
+- graphics
+- logo
+- text
+- typography
+- pattern
+- design
+- shape
+- wear marks
+- folds
+- proportions
 
-STRICT:
-- Do NOT redraw it
-- Do NOT recreate it
-- Do NOT enhance or fix it
-- Do NOT rotate, align, or correct it
-- Treat it as FIXED and UNTOUCHABLE
+Do NOT:
+- redesign
+- beautify
+- sharpen
+- recolor
+- modernize
+- replace branding
+- invent new text
 
-CRITICAL — Graphic/Text Lock:
-- Any printed graphics (book covers, labels, artwork) are PART OF VISIBLE REGION.
-- These must NOT be regenerated.
+COMPLETION RULE:
+- Extend naturally from visible boundaries.
+- Generate only unseen / missing areas.
+- Keep same object identity.
+- Keep same construction style.
+- Keep realistic proportions.
+- Keep same age / wear level.
 
-STRICT:
-- Do NOT redraw cover design
-- Do NOT recreate typography
-- Do NOT approximate layout
-- Do NOT restyle graphics
+DETAIL RULE:
+Use provided data to help complete accurately:
+- visible_description helps with colors, materials, text, design.
+- short_description helps with object type/use.
+- object_name helps identity.
+- category helps structure.
 
-- Treat cover/label as an image patch and KEEP IT EXACT.
+BOOK / PRINTED OBJECT RULE:
+If selected object is book / notebook / magazine / box:
+- preserve visible cover design exactly in spirit.
+- preserve title / author text if visible.
+- complete hidden spine/back consistently.
+- do NOT invent a different edition.
 
-NO STYLE CORRECTION:
-- Do NOT make it cleaner, sharper, brighter, or more realistic
-- Do NOT normalize colors or lighting
-- Keep original imperfections exactly
+ANTI-HALLUCINATION:
+- No extra accessories.
+- No extra objects.
+- No mixed nearby object features.
+- No fake brands.
+- No random added text.
 
-Completion rule:
-- Generate ONLY missing (non-visible) parts
-- Extend outward from visible edges
-- Do NOT rebuild the object
+BACKGROUND RULE:
+- Plain clean neutral background.
+- One object only.
+- Full object visible.
 
-Completion must follow:
-- same color
-- same texture
-- same material
-- same pattern/design
-
-Think:
-- "continue the same object outward"
-- NOT "generate a new version"
-
-Text rule:
-- If object contains text:
-  - keep visible text EXACTLY same
-  - do NOT change font or layout
-  - do NOT replace with other text
-  - do NOT hallucinate missing text
-
-Anti-mixing (CRITICAL):
-- Do NOT mix features from other objects
-- Do NOT borrow colors, text, or patterns from nearby items
-- Do NOT create hybrid objects
-
-Identity rule:
-- Output must be SAME object instance
-- Not similar, not improved, not replaced
-
-Strict constraints:
-- No redesign
-- No style change
-- No structure change
-- Visible region = ZERO modification
-
-Output:
-- One object only
-- Fully completed
-- Clean plain background
-- No extra objects
+OUTPUT:
+- Same original selected object
+- Completed realistically
+- Visible region preserved
+- Missing parts completed
+- Plain background
 """
 
     start_time_gen_obj = time.time()

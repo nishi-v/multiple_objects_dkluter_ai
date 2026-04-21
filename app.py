@@ -83,7 +83,7 @@ def sync_all_meta_categories(category_map, parent_key):
 # ---------------- ASYNC STREAM GENERATION ----------------
 async def run_generation(image, selected_objs, temp_dir, placeholder):
     tasks = []
-    gen_wall_start = time.time()  # ⏱ Wall clock from click to last image
+    gen_run_start = time.time()  
 
     for obj in selected_objs:
         path = os.path.join(
@@ -112,7 +112,7 @@ async def run_generation(image, selected_objs, temp_dir, placeholder):
         results.append(result)
 
         # 🔥 LIVE STREAM UI — 3 cols grid as images arrive
-        elapsed = time.time() - gen_wall_start
+        elapsed = time.time() - gen_run_start
         with placeholder.container():
             st.subheader(f"⚡ Live Generation — {len(results)}/{len(selected_objs)} done | ⏱ {elapsed:.1f}s elapsed")
             cols_per_row = 3
@@ -130,13 +130,13 @@ async def run_generation(image, selected_objs, temp_dir, placeholder):
                             st.success(r["object_name"])
                             st.caption(f"⚡ {r['gen_time']:.2f}s")  # ✅ individual time
 
-    # ✅ Wall clock time = from Generate click to last image done
-    total_wall_time = time.time() - gen_wall_start
+    # clock time = from Generate click to last image done
+    total_run_time = time.time() - gen_run_start
 
     # ✅ Sum of all individual image times (total API time)
     total_api_time = sum(r["gen_time"] for r in results)
 
-    return results, total_wall_time, total_api_time
+    return results, total_run_time, total_api_time
 
 # ---------------- ASYNC STREAM METADATA ----------------
 async def run_metadata(selected_results, enable_search, placeholder):
@@ -206,7 +206,7 @@ if st.session_state.uploaded_image_pil is not None:
     if st.button("Detect Objects"):
         with st.spinner("Detecting..."):
             start = time.time()
-            objects, detect_time = asyncio.run(
+            objects, detect_time, search_used_in_detection = asyncio.run(
                 # detect_objects_fast(st.session_state.uploaded_image_pil)
                 detect_objects(client, st.session_state.uploaded_image_pil)
             )
@@ -217,11 +217,14 @@ if st.session_state.uploaded_image_pil is not None:
             st.session_state.detect_app_time = app_time
 
             st.write(f"Detection Time: {detect_time:.2f}s")
+            st.write(f"Search Tool used for detection: {search_used_in_detection}")
         
 # if "detect_app_time" in st.session_state:
 #     st.success(f"Detection App Time: {st.session_state.detect_app_time:.2f}s")
 # ---------------- GENERATION ----------------
 if st.session_state.detected_objects:
+    # st.write(f"Detection Time: {detect_time:.2f}s")
+    # st.write(f"Search Tool used for detection: {search_used_in_detection}")
     st.subheader("Select Objects")
 
     category_map = defaultdict(list)
@@ -265,6 +268,7 @@ if st.session_state.detected_objects:
         for i, obj in enumerate(objects):
             confidence = obj.get("confidence_score", "")
             visibility = obj.get("visibility_score", "")
+            visible_desc = obj.get("visible_description", "")
 
             # if confidence and int(confidence) < 40:
             #     continue
@@ -272,6 +276,7 @@ if st.session_state.detected_objects:
                 label = (
                     f"object: {obj['object_name']}  |  "
                     f"location: {obj['position_hint']}  |  "
+                    f"visible_description: {visible_desc}  |  "
                     f"confidence: {confidence}  |  "
                     f"visibility: {visibility}"
                 )
@@ -284,6 +289,7 @@ if st.session_state.detected_objects:
                         obj.get("category", "").strip().lower(),
                         obj.get("object_name", "").strip().lower(),
                         obj.get("position_hint", "").strip().lower()[:40],
+                        obj.get("visible_description", "").strip().lower(),
                     )
                     if key not in selected_seen:
                         selected_seen.add(key)
@@ -295,7 +301,7 @@ if st.session_state.detected_objects:
 
         with st.spinner("Generating (streaming)..."):
 
-            results, wall_time, api_time = asyncio.run(
+            results, generation_time, api_time = asyncio.run(
                 run_generation(
                     st.session_state.uploaded_image_pil,
                     selected,
@@ -308,10 +314,10 @@ if st.session_state.detected_objects:
             avg = api_time / len(results) if results else 0
 
             st.session_state.generated_results = results
-            st.session_state.gen_total = wall_time   # ✅ wall time = click → last image
+            st.session_state.gen_total = generation_time  
             st.session_state.gen_api_time = api_time  # ✅ sum of all individual times
             st.session_state.gen_avg = avg
-            st.session_state.gen_app_time = wall_time
+            st.session_state.gen_app_time = generation_time
             st.session_state.generation_done = True
 
 
@@ -319,8 +325,7 @@ if st.session_state.detected_objects:
     #     st.success(f"Generation App Time: {st.session_state.gen_app_time:.2f}s")
 
     if st.session_state.generation_done:
-        # ✅ Wall time = from Generate click to last image
-        st.success(f"✅ All done in {st.session_state.gen_total:.2f}s (wall clock)")
+        st.success(f"✅ All done in {st.session_state.gen_total:.2f}s")
         st.write(f"📡 Total API Time (sum): {st.session_state.gen_api_time:.2f}s")
         st.write(f"⚡ Avg per Image: {st.session_state.gen_avg:.2f}s")
 
@@ -347,183 +352,183 @@ if st.session_state.detected_objects:
                         if r.get("gen_time"):
                             st.caption(f"Image {idx + 1} | ⚡ {r['gen_time']:.2f}s")
 
-# # ---------------- METADATA ----------------
-# if st.session_state.generation_done:
-#     st.subheader("Select for Metadata")
+# ---------------- METADATA ----------------
+if st.session_state.generation_done:
+    st.subheader("Select for Metadata")
 
-#     # Group generated results by category
-#     meta_category_map = defaultdict(list)
-#     for r in st.session_state.generated_results:
-#         category = r.get("category", "").strip().lower()
-#         if not category:
-#             category = r["object_name"].split()[0].lower()
-#         meta_category_map[category].append(r)
+    # Group generated results by category
+    meta_category_map = defaultdict(list)
+    for r in st.session_state.generated_results:
+        category = r.get("category", "").strip().lower()
+        if not category:
+            category = r["object_name"].split()[0].lower()
+        meta_category_map[category].append(r)
 
-#     selected_ids = []
+    selected_ids = []
 
-#     # Global Select All Categories Checkbox
-#     all_meta_key = "meta_select_all_categories"
-#     if all_meta_key not in st.session_state:
-#         st.session_state[all_meta_key] = False
+    # Global Select All Categories Checkbox
+    all_meta_key = "meta_select_all_categories"
+    if all_meta_key not in st.session_state:
+        st.session_state[all_meta_key] = False
 
-#     st.checkbox(
-#         "Select All Categories",
-#         key=all_meta_key,
-#         on_change=sync_all_meta_categories,
-#         args=(meta_category_map, all_meta_key)
-#     )
+    st.checkbox(
+        "Select All Categories",
+        key=all_meta_key,
+        on_change=sync_all_meta_categories,
+        args=(meta_category_map, all_meta_key)
+    )
 
-#     # Loop through each category
-#     for category, objects in meta_category_map.items():
-#         st.markdown(f"### {category.capitalize()}s")
+    # Loop through each category
+    for category, objects in meta_category_map.items():
+        st.markdown(f"### {category.capitalize()}s")
 
-#         parent_key = f"meta_select_all_{category}"
+        parent_key = f"meta_select_all_{category}"
 
-#         if parent_key not in st.session_state:
-#             st.session_state[parent_key] = False
+        if parent_key not in st.session_state:
+            st.session_state[parent_key] = False
 
-#         # 1. The Category Checkbox (Only syncs when clicked)
-#         st.checkbox(
-#             f"Select All {category.capitalize()}s",
-#             key=parent_key,
-#             on_change=sync_meta_category,
-#             args=(category, objects, parent_key)
-#         )
+        # 1. The Category Checkbox (Only syncs when clicked)
+        st.checkbox(
+            f"Select All {category.capitalize()}s",
+            key=parent_key,
+            on_change=sync_meta_category,
+            args=(category, objects, parent_key)
+        )
 
-#         # 2. 3 Columns for Individual Items
-#         cols = st.columns(3)
-#         for i, obj in enumerate(objects):
-#             item_key = f"m_{obj['object_id']}"
+        # 2. 3 Columns for Individual Items
+        cols = st.columns(3)
+        for i, obj in enumerate(objects):
+            item_key = f"m_{obj['object_id']}"
             
-#             # Ensure the state exists
-#             if item_key not in st.session_state:
-#                 st.session_state[item_key] = False
+            # Ensure the state exists
+            if item_key not in st.session_state:
+                st.session_state[item_key] = False
 
-#             with cols[i % 3]:
-#                 label = (
-#                     f"object: {obj['object_name']}  |  "
-#                     f"location: {obj['position_hint']}"
-#                 )
+            with cols[i % 3]:
+                label = (
+                    f"object: {obj['object_name']}  |  "
+                    f"location: {obj['position_hint']}"
+                )
                 
-#                 # This now allows individual selection!
-#                 if st.checkbox(label, key=item_key):
-#                     selected_ids.append(obj["object_id"])
+                # This now allows individual selection!
+                if st.checkbox(label, key=item_key):
+                    selected_ids.append(obj["object_id"])
 
 
-#     if st.button("Generate Metadata"):
-#         placeholder = st.empty()
+    if st.button("Generate Metadata"):
+        placeholder = st.empty()
 
-#         selected_results = [
-#             r for r in st.session_state.generated_results
-#             if r["object_id"] in selected_ids
-#         ]
+        selected_results = [
+            r for r in st.session_state.generated_results
+            if r["object_id"] in selected_ids
+        ]
 
-#         with st.spinner("Metadata streaming..."):
-#             start = time.time()
+        with st.spinner("Metadata streaming..."):
+            start = time.time()
 
-#             results_map = asyncio.run(
-#                 run_metadata(
-#                     selected_results,
-#                     enable_search,
-#                     placeholder
-#                 )
-#             )
+            results_map = asyncio.run(
+                run_metadata(
+                    selected_results,
+                    enable_search,
+                    placeholder
+                )
+            )
 
-#             app_time = time.time() - start
-#             meta_times = [
-#                 m["Time Taken"]
-#                 for m in results_map.values()
-#                 if m and "Time Taken" in m
-#             ]
+            app_time = time.time() - start
+            meta_times = [
+                m["Time Taken"]
+                for m in results_map.values()
+                if m and "Time Taken" in m
+            ]
 
-#             total_meta_time = sum(meta_times)
-#             avg_meta_time = total_meta_time / len(meta_times) if meta_times else 0
+            total_meta_time = sum(meta_times)
+            avg_meta_time = total_meta_time / len(meta_times) if meta_times else 0
 
-#             updated = []
-#             for r in st.session_state.generated_results:
-#                 if r["object_id"] in results_map:
-#                     r["metadata"] = results_map[r["object_id"]]
-#                 updated.append(r)
+            updated = []
+            for r in st.session_state.generated_results:
+                if r["object_id"] in results_map:
+                    r["metadata"] = results_map[r["object_id"]]
+                updated.append(r)
 
-#             st.session_state.generated_results = updated
-#             st.session_state.meta_total = total_meta_time
-#             st.session_state.meta_avg = avg_meta_time
-#             st.session_state.meta_app_time = app_time
-#             st.session_state.metadata_done = True
+            st.session_state.generated_results = updated
+            st.session_state.meta_total = total_meta_time
+            st.session_state.meta_avg = avg_meta_time
+            st.session_state.meta_app_time = app_time
+            st.session_state.metadata_done = True
 
-#     if st.session_state.metadata_done:
-#         st.write(f"Metadata Total: {st.session_state.meta_total:.2f}s")
-#         st.write(f"Avg Metadata: {st.session_state.meta_avg:.2f}s")
+    if st.session_state.metadata_done:
+        st.write(f"Metadata Total: {st.session_state.meta_total:.2f}s")
+        st.write(f"Avg Metadata: {st.session_state.meta_avg:.2f}s")
 
-#         results = st.session_state.generated_results
+        results = st.session_state.generated_results
 
-#         cols_per_row = 2
-#         total = len(results)
-#         rows = math.ceil(total / cols_per_row)
+        cols_per_row = 4
+        total = len(results)
+        rows = math.ceil(total / cols_per_row)
 
-#         for i in range(rows):
-#             cols = st.columns(cols_per_row)
+        for i in range(rows):
+            cols = st.columns(cols_per_row)
 
-#             for j in range(cols_per_row):
-#                 idx = i * cols_per_row + j
-#                 if idx >= total:
-#                     continue
+            for j in range(cols_per_row):
+                idx = i * cols_per_row + j
+                if idx >= total:
+                    continue
 
-#                 r = results[idx]
+                r = results[idx]
 
-#                 if not r.get("metadata"):
-#                     continue
+                if not r.get("metadata"):
+                    continue
 
-#                 m = r["metadata"]
+                m = r["metadata"]
 
-#                 with cols[j]:
-#                     with st.container(border=True):
+                with cols[j]:
+                    with st.container(border=True):
 
-#                         # 🔥 HEADER
-#                         st.markdown(f"### {r['object_name']}")
+                        # 🔥 HEADER
+                        st.markdown(f"### {r['object_name']}")
 
-#                         # 🔥 IMAGE
-#                         st.image(r["image_path"], use_container_width=True)
+                        # 🔥 IMAGE
+                        st.image(r["image_path"], use_container_width=True)
 
-#                         # 🔥 META STATS
-#                         c1, c2 = st.columns(2)
+                        # 🔥 META STATS
+                        c1, c2 = st.columns(2)
 
-#                         with c1:
-#                             st.info(f"⏱ Meta: {m['Time Taken']:.2f}s")
-#                             st.info(f"📥 Input: {m['Input Token Count']}")
+                        with c1:
+                            st.info(f"⏱ Meta: {m['Time Taken']:.2f}s")
+                            st.info(f"📥 Input: {m['Input Token Count']}")
 
-#                         with c2:
-#                             st.info(f"📤 Output: {m['Output Token Count']}")
-#                             st.info(f"🔍 Search: {m['Search Tool Used']}")
+                        with c2:
+                            st.info(f"📤 Output: {m['Output Token Count']}")
+                            st.info(f"🔍 Search: {m['Search Tool Used']}")
 
-#                         # 🔥 TITLE + DESC
-#                         st.markdown("#### 🧾 Details")
-#                         st.success(f"**Title:** {m['Title']}")
-#                         st.info(f"**Desc:** {m['Description']}")
+                        # 🔥 TITLE + DESC
+                        st.markdown("#### 🧾 Details")
+                        st.success(f"**Title:** {m['Title']}")
+                        st.info(f"**Desc:** {m['Description']}")
 
-#                         # 🔥 TAGS (BOXED)
-#                         if m.get("Tags"):
-#                             st.markdown("#### 🏷 Tags")
-#                             for tag in m["Tags"]:
-#                                 with st.container(border=True):
-#                                     for k, v in tag.items():
-#                                         st.write(f"**{k}:** {v}")
+                        # 🔥 TAGS (BOXED)
+                        if m.get("Tags"):
+                            st.markdown("#### 🏷 Tags")
+                            for tag in m["Tags"]:
+                                with st.container(border=True):
+                                    for k, v in tag.items():
+                                        st.write(f"**{k}:** {v}")
 
-#                         # 🔥 FIELDS (BOXED)
-#                         if m.get("Fields"):
-#                             st.markdown("#### 📦 Fields")
-#                             for field in m["Fields"]:
-#                                 with st.container(border=True):
-#                                     for k, v in field.items():
-#                                         st.write(f"**{k}:** {v}")
+                        # 🔥 FIELDS (BOXED)
+                        if m.get("Fields"):
+                            st.markdown("#### 📦 Fields")
+                            for field in m["Fields"]:
+                                with st.container(border=True):
+                                    for k, v in field.items():
+                                        st.write(f"**{k}:** {v}")
 
 # ---------------- APP TIMINGS ----------------
 detect = st.session_state.get("detect_app_time", 0)
 gen = st.session_state.get("gen_app_time", 0)
-# meta = st.session_state.get("meta_app_time", 0)
+meta = st.session_state.get("meta_app_time", 0)
 
-# if detect or gen or meta:
-if detect or gen:
+if detect or gen or meta:
+# if detect or gen:
     st.markdown("## ⏱ App Performance")
     col1, col2, col3 = st.columns(3)
 
@@ -533,10 +538,10 @@ if detect or gen:
     with col2:
         st.success(f"Generation: {gen:.2f}s")
 
-    # with col3:
-    #     st.success(f"Metadata: {meta:.2f}s")
+    with col3:
+        st.success(f"Metadata: {meta:.2f}s")
 
-    total = detect + gen #+ meta
+    total = detect + gen + meta
     st.info(f"🚀 Total App Time: {total:.2f}s")
 
 # ---------------- DOWNLOAD ----------------

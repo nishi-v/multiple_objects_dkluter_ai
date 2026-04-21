@@ -65,6 +65,7 @@ async def generate_metadata(
 You are an expert asset cataloger.
 
 Analyze the image and return only valid JSON in exactly this structure:
+STRICTLY USE GOOGLE SEARCH TOOL BEFORE GENERATION
 
 {{
   "Data": {{
@@ -142,7 +143,9 @@ Use this category and field guidance:
         timeout=40
     )
 
+
     end_time_metadata_extract = time.time() - start_time_metadata_extract
+    print(response)
     metadata = response.usage_metadata
     # input_token_count = 0
     # cache_token_count = 0
