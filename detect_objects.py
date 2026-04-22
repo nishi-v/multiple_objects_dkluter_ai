@@ -223,7 +223,7 @@ FINAL RULES:
                 )
             )
         ),
-        timeout=50
+        timeout=100
     )
     end_time_detect_objects = time.time() - start_time_detect_objects
 
