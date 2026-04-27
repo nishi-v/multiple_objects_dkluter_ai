@@ -8,14 +8,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import time
 
-thread_pool = ThreadPoolExecutor(max_workers=20)
-
-# def init_client(env_path:Union[Path, str]) -> Client:
-#     load_dotenv(env_path)
-#     api_key = os.getenv("GEMINI_API_KEY")
-#     if not api_key:
-#         raise ValueError("GEMINI_API_KEY not found in environment or .env")
-#     return genai.Client(api_key=api_key)
+thread_pool = ThreadPoolExecutor(max_workers=3)
 
 def safe_name(name: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_-]+", "_", name).strip("_")
@@ -141,13 +134,13 @@ OUTPUT:
             thread_pool,
             lambda: client.models.generate_content(
                 model="gemini-3.1-flash-image-preview",
-                # model="gemini-2.5-flash-lite",
+                # model="gemini-2.5-flash-image",
                 contents=[prompt, reference_image],
                 config=types.GenerateContentConfig(
-                    # service_tier=,
                     temperature=0.02,
                     response_modalities=["IMAGE"],
                     image_config=types.ImageConfig(image_size="512", aspect_ratio="1:1"),
+                    # image_config=types.ImageConfig(aspect_ratio="1:1"),
                     # thinking_config=types.ThinkingConfig(thinking_level="low"),
                     # thinking_config=types.ThinkingConfig(thinking_budget=0)
                 )

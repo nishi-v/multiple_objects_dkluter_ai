@@ -12,6 +12,7 @@ from google import genai
 import asyncio
 import time
 from collections import defaultdict
+from google.oauth2 import service_account
 
 from detect_objects import detect_objects, resize_image
 # from detect_objects import detect_objects_fast, resize_image
@@ -24,8 +25,38 @@ dir = Path(os.getcwd())
 ENV_PATH: Path = dir / '.env'
 
 load_dotenv(ENV_PATH)
-api_key = os.getenv("GEMINI_API_KEY")
-client = genai.Client(api_key=api_key)
+# api_key = os.getenv("GEMINI_API_KEY")
+# client = genai.Client(api_key=api_key)
+
+def get_client(loc=None):
+    try:
+        # Vertex JSON auth
+        project_id = os.getenv("VERTEX_AI_PROJECT_ID")
+        json_path = os.getenv("VERTEX_JSON_PATH")
+
+        if project_id and os.path.exists(json_path):
+            credentials = service_account.Credentials.from_service_account_file(
+                json_path,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            )
+
+            return genai.Client(
+                vertexai=True,
+                project=project_id,
+                location= "global" if loc is None else loc,
+                credentials=credentials,
+                http_options={"timeout": 600000}
+            )
+
+        # Nothing configured
+        return None
+
+    except Exception as e:
+        print(f"Client init failed: {e}")
+        return None
+
+
+client = get_client(loc="global")
 
 st.set_page_config(page_title="D'kluter AI Studio", layout="wide")
 
@@ -82,58 +113,111 @@ def sync_all_meta_categories(category_map, parent_key):
 
 # ---------------- ASYNC STREAM GENERATION ----------------
 async def run_generation(image, selected_objs, temp_dir, placeholder):
-    tasks = []
-    gen_run_start = time.time()  
+    gen_run_start = time.time()
 
-    for obj in selected_objs:
+    clients = [
+        (get_client("global"), "global"),
+        (get_client("global"), "global"),
+        (get_client("global"), "global"),
+        (get_client("global"), "global"),
+    ]
+
+    clients = [(c, r) for c, r in clients if c is not None]
+
+    semaphores = [asyncio.Semaphore(2) for _ in clients]
+
+    results = []
+
+    async def generate_with_failover(obj, path, start_idx):
+        total = len(clients)
+
+        for region_shift in range(total):
+            idx = (start_idx + region_shift) % total
+            client, region = clients[idx]
+
+            async with semaphores[idx]:
+                for attempt in range(2):
+                    try:
+                        await asyncio.sleep(0.3)
+
+                        t = await generate_object_image(
+                            client=client,
+                            reference_image=image,
+                            obj=obj,
+                            output_path=path
+                        )
+
+                        return obj, path, t, region
+
+                    except Exception as e:
+                        msg = str(e).lower()
+
+                        if "429" in msg or "resource_exhausted" in msg:
+                            await asyncio.sleep(1 + attempt)
+                            continue
+                        break
+
+        raise Exception(f"All regions failed: {obj['object_name']}")
+
+    tasks = []
+
+    for i, obj in enumerate(selected_objs):
         path = os.path.join(
             temp_dir,
             f"{obj['object_id']}_{safe_name(obj['object_name'])}.png"
         )
 
-        async def task_wrapper(o=obj, p=path):
-            t = await generate_object_image(client, image, o, p)
-            return o, p, t
-
-        tasks.append(asyncio.create_task(task_wrapper()))
-
-    results = []
+        tasks.append(
+            asyncio.create_task(
+                generate_with_failover(obj, path, i % len(clients))
+            )
+        )
 
     for completed in asyncio.as_completed(tasks):
-        obj, path, gen_time = await completed  # gen_time = time for THIS image only
+        try:
+            obj, path, gen_time, region = await completed
 
-        result = {
-            **obj,
-            "image_path": path,
-            "gen_time": gen_time,  # ✅ individual time per image
-            "metadata": {}
-        }
+            results.append({
+                **obj,
+                "image_path": path,
+                "gen_time": gen_time,
+                "region": region,
+                "metadata": {}
+            })
 
-        results.append(result)
+        except Exception as e:
+            st.warning(str(e))
 
-        # 🔥 LIVE STREAM UI — 3 cols grid as images arrive
         elapsed = time.time() - gen_run_start
+
         with placeholder.container():
-            st.subheader(f"⚡ Live Generation — {len(results)}/{len(selected_objs)} done | ⏱ {elapsed:.1f}s elapsed")
-            cols_per_row = 3
+            st.subheader(
+                f"⚡ Live Generation — {len(results)}/{len(selected_objs)} done | ⏱ {elapsed:.1f}s"
+            )
+
+            cols_per_row = 5
             rows = math.ceil(len(results) / cols_per_row)
+
             for i in range(rows):
                 cols = st.columns(cols_per_row)
+
                 for j in range(cols_per_row):
                     idx = i * cols_per_row + j
+
                     if idx >= len(results):
                         continue
+
                     r = results[idx]
+
                     with cols[j]:
                         with st.container(border=True):
                             st.image(r["image_path"], use_container_width=True)
                             st.success(r["object_name"])
-                            st.caption(f"⚡ {r['gen_time']:.2f}s")  # ✅ individual time
+                            st.caption(
+                                f"⚡ {r['gen_time']:.2f}s | 🌍 {r.get('region','')}"
+                            )
 
-    # clock time = from Generate click to last image done
     total_run_time = time.time() - gen_run_start
-
-    # ✅ Sum of all individual image times (total API time)
     total_api_time = sum(r["gen_time"] for r in results)
 
     return results, total_run_time, total_api_time
@@ -141,22 +225,24 @@ async def run_generation(image, selected_objs, temp_dir, placeholder):
 # ---------------- ASYNC STREAM METADATA ----------------
 async def run_metadata(selected_results, enable_search, placeholder):
     tasks = []
+    
+    # 1. ADD SEMAPHORE: Limit to 5 concurrent Vertex AI metadata calls
+    meta_semaphore = asyncio.Semaphore(5)
 
     for r in selected_results:
         img = Image.open(r["image_path"])
 
         async def task_wrapper(res=r, image=img):
-            m = await generate_metadata(
-                client,
-                image=image,
-                obj=res,
-                search_tool=enable_search
-            )
-            # m = await generate_metadata_fast(
-            #     image=image,
-            #     obj=res,
-            # )
-            return res["object_id"], m
+            # 2. WRAP WITH SEMAPHORE
+            async with meta_semaphore:
+                await asyncio.sleep(0.2) # Minor stagger
+                m = await generate_metadata(
+                    client,
+                    image=image,
+                    obj=res,
+                    search_tool=enable_search
+                )
+                return res["object_id"], m
 
         tasks.append(asyncio.create_task(task_wrapper()))
 
