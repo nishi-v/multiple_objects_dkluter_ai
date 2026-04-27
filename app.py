@@ -28,35 +28,41 @@ load_dotenv(ENV_PATH)
 # api_key = os.getenv("GEMINI_API_KEY")
 # client = genai.Client(api_key=api_key)
 
-def get_client(loc=None):
+def get_client(loc="global"):
     try:
-        # Vertex JSON auth
-        project_id = os.getenv("VERTEX_AI_PROJECT_ID")
-        json_path = os.getenv("VERTEX_JSON_PATH")
+        # ---------- Streamlit Cloud ----------
+        if "gcp_service_account" in st.secrets:
+            credentials = service_account.Credentials.from_service_account_info(
+                st.secrets["gcp_service_account"],
+                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            )
 
-        if project_id and os.path.exists(json_path):
+            project_id = st.secrets["VERTEX_AI_PROJECT_ID"]
+
+        # ---------- Localhost ----------
+        else:
+            project_id = os.getenv("VERTEX_AI_PROJECT_ID")
+            json_path = os.getenv("VERTEX_JSON_PATH", "vertex_key.json")
+
             credentials = service_account.Credentials.from_service_account_file(
                 json_path,
                 scopes=["https://www.googleapis.com/auth/cloud-platform"],
             )
 
-            return genai.Client(
-                vertexai=True,
-                project=project_id,
-                location= "global" if loc is None else loc,
-                credentials=credentials,
-                http_options={"timeout": 600000}
-            )
-
-        # Nothing configured
-        return None
+        return genai.Client(
+            vertexai=True,
+            project=project_id,
+            location=loc,
+            credentials=credentials,
+            http_options={"timeout": 600000}
+        )
 
     except Exception as e:
-        print(f"Client init failed: {e}")
+        print("Client init failed:", e)
         return None
 
 
-client = get_client(loc="global")
+client = get_client("global")
 
 st.set_page_config(page_title="D'kluter AI Studio", layout="wide")
 
